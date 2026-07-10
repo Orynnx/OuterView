@@ -7,8 +7,9 @@
 
     <application
         android:allowBackup="false"
-        android:icon="@android:drawable/ic_menu_view"
+        android:icon="@mipmap/ic_launcher"
         android:label="@string/app_name"
+        android:roundIcon="@mipmap/ic_launcher"
         android:supportsRtl="true"
         android:theme="@style/Theme.FunCardTester">
         <meta-data

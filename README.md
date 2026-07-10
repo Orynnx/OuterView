@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="branding/outerview-icon.png" width="128" alt="OuterView icon" />
+</p>
+
 # OuterView
 
 OuterView 是面向小米 17 Pro / 17 Pro Max 背屏的自定义 Smart Assistant 卡片加载器。它同时是一个独立 LSPosed 模块和一个 Compose 管理器，不依赖 REAREye。
@@ -44,11 +48,29 @@ docs/                架构、二次开发与卡片适配文档
 
 要求 JDK 17、Android SDK 37：
 
+Windows PowerShell：
+
+```powershell
+$env:JAVA_HOME = "C:\Program Files\Android\Android Studio\jbr"
+.\gradlew.bat :core:testDebugUnitTest :app:assembleDebug
+```
+
+Linux / macOS：
+
 ```bash
+export JAVA_HOME=/path/to/jdk17
 ./gradlew :core:testDebugUnitTest :app:assembleDebug
 ```
 
-产物位于 `app/build/outputs/apk/debug/app-debug.apk`。
+Debug APK 位于 `app/build/outputs/apk/debug/app-debug.apk`。
+
+构建未签名 Release APK：
+
+```powershell
+.\gradlew.bat :core:testDebugUnitTest :app:assembleRelease
+```
+
+Release 产物位于 `app/build/outputs/apk/release/app-release-unsigned.apk`。公开发布前需要使用自己的长期签名密钥签名；不要把 `.jks`、密码或 `local.properties` 提交到 Git。
 
 ## 二次开发
 
