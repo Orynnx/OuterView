@@ -1,0 +1,48 @@
+name: Bug report
+description: Report an OuterView loader or card lifecycle problem
+title: "[Bug] "
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: Do not upload private notifications, account data, signing keys, or full `/data` archives.
+  - type: input
+    id: device
+    attributes:
+      label: Device and system version
+      placeholder: Xiaomi 17 Pro, OS build ...
+    validations:
+      required: true
+  - type: input
+    id: host
+    attributes:
+      label: com.xiaomi.subscreencenter version
+    validations:
+      required: true
+  - type: input
+    id: outerview
+    attributes:
+      label: OuterView version
+    validations:
+      required: true
+  - type: dropdown
+    id: hook
+    attributes:
+      label: Host API status
+      options:
+        - Host API v3 connected
+        - Hook not ready
+        - Unknown
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Redacted diagnostics and logs
+      description: Include commandId and card diagnostics where possible.

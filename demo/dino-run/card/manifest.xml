@@ -1,0 +1,187 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Widget frameRate="30"
+        scaleByDensity="false"
+        screenWidth="1080"
+        version="2"
+        useVariableUpdater="HyperMaterial,DateTime.Second">
+    <Var name="card_scale" type="number" expression="min((#view_width / 480),(#view_height / 304))"/>
+    <Var name="card_offset_x" type="number" expression="((#view_width - (480 * #card_scale)) / 2)"/>
+    <Var name="card_offset_y" type="number" expression="((#view_height - (304 * #card_scale)) / 2)"/>
+
+    <!-- 0: ready, 1: running, 2: game over -->
+    <Var name="game_state" type="number" expression="0" const="true"/>
+    <Var name="score" type="number" expression="0" const="true"/>
+    <Var name="jump_ready" type="number" expression="1" const="true"/>
+    <Var name="crash_x" type="number" expression="440" const="true"/>
+    <!-- Sound is opt-in and starts muted on every fresh card instance. -->
+    <Var name="sound_enabled" type="number" expression="0" const="true"/>
+
+    <!--
+      760 ms symmetric parabolic jump: y = -72 * 4t(1-t).
+      Nine samples keep the motion physical without relying on non-linear easing support.
+    -->
+    <Var name="jump_y" type="number">
+        <VariableAnimation name="jump_animation" initPause="true" loop="false">
+            <Item value="0" time="0"/>
+            <Item value="-31.5" time="95"/>
+            <Item value="-54" time="190"/>
+            <Item value="-67.5" time="285"/>
+            <Item value="-72" time="380"/>
+            <Item value="-67.5" time="475"/>
+            <Item value="-54" time="570"/>
+            <Item value="-31.5" time="665"/>
+            <Item value="0" time="760"/>
+            <Triggers>
+                <Trigger action="end">
+                    <VariableCommand name="jump_ready" expression="1"/>
+                </Trigger>
+            </Triggers>
+        </VariableAnimation>
+    </Var>
+
+    <!--
+      312 logical pixels in 1250 ms: about 250 px/s.
+      The cactus ends at x=128; with width 29 its right edge reaches x=157,
+      so it resets only after moving completely into the camera occlusion zone.
+    -->
+    <Var name="obstacle_x" type="number">
+        <VariableAnimation name="obstacle_animation" initPause="true" loop="false">
+            <Item value="440" time="0"/>
+            <Item value="128" time="1250"/>
+            <Triggers>
+                <Trigger action="end">
+                    <MultiCommand condition="#game_state==1">
+                        <VariableCommand name="score" expression="(#score + 1)"/>
+                        <AnimationCommand target="obstacle_x" command="play" delay="20"/>
+                    </MultiCommand>
+                </Trigger>
+            </Triggers>
+        </VariableAnimation>
+    </Var>
+
+    <!-- MAML uses { and } as its XML-safe less-than and greater-than operators. -->
+    <Var name="collision_watch"
+         type="number"
+         expression="ifelse((((#game_state==1) ** (#obstacle_x { 242)) ** ((#obstacle_x + 29) } 190)) ** (#jump_y } -32),1,0)"
+         threshold="0.5">
+        <Trigger>
+            <MultiCommand condition="#collision_watch">
+                <VariableCommand name="crash_x" expression="#obstacle_x"/>
+                <VariableCommand name="game_state" expression="2"/>
+                <SoundCommand sound="assets/sounds/die.mp3" volume="0.7" loop="false" keepCur="false" condition="#sound_enabled"/>
+            </MultiCommand>
+        </Trigger>
+    </Var>
+
+    <Group x="#card_offset_x" y="#card_offset_y" scaleX="#card_scale" scaleY="#card_scale">
+        <Rectangle x="0" y="0" w="480" h="304" fillColor="#FF050A12"/>
+        <Circle x="432" y="22" r="118" fillColor="#240D2D52"/>
+        <Circle x="154" y="310" r="152" fillColor="#1408182B"/>
+
+        <!-- Full-bleed game surface: no card panel or border. -->
+        <Rectangle x="178" y="43" w="54" h="3" cornerRadius="1.5" fillColor="#FF63B3FF"/>
+
+        <Text x="190" y="58" size="14" color="#FF92A9C4" text="DINO RUN" fontFamily="mipro-demibold"/>
+        <Text x="420" y="54" size="24" color="#FFFFFFFF" textExp="#score" align="right" fontFamily="mipro-demibold"/>
+
+        <!-- Compact SFX toggle; muted is the default. -->
+        <Text x="326" y="59" size="10" color="#FF92A9C4" text="SFX" fontFamily="mipro-medium"/>
+        <Rectangle x="354" y="57" w="34" h="16" cornerRadius="8" fillColor="#665F789A"/>
+        <Rectangle x="354" y="57" w="34" h="16" cornerRadius="8" fillColor="#B363B3FF" visibility="#sound_enabled"/>
+        <Circle x="ifelse(#sound_enabled,380,362)" y="65" r="6" fillColor="#FFFFFFFF"/>
+
+        <!-- Original cloud material, recolored for the blue-black surface. -->
+        <Image x="338" y="88" w="58" h="18" src="assets/cloud.png"/>
+        <Circle x="275" y="93" r="2" fillColor="#8063B3FF"/>
+        <Circle x="416" y="121" r="1.5" fillColor="#6692A9C4"/>
+
+        <!-- Original running frames from the supplied material pack. -->
+        <Group x="190" y="(174 + #jump_y)" visibility="#game_state==1">
+            <Image w="52" h="56" src="assets/dinosaur2.png">
+                <SourcesAnimation>
+                    <Source src="assets/dinosaur2.png" time="0"/>
+                    <Source src="assets/dinosaur3.png" time="110"/>
+                    <Source src="assets/dinosaur2.png" time="220"/>
+                </SourcesAnimation>
+            </Image>
+        </Group>
+        <Image x="190" y="174" w="52" h="56" src="assets/dinosaur2.png" visibility="#game_state==0"/>
+        <Image x="190" y="174" w="52" h="56" src="assets/dinosaur7.png" visibility="#game_state==2"/>
+
+        <!-- Original cactus material. -->
+        <Image x="#obstacle_x" y="200" w="29" h="32" src="assets/cactus2.png" visibility="#game_state==1"/>
+
+        <!-- Frozen cactus shown at the collision coordinate. -->
+        <Image x="#crash_x" y="200" w="29" h="32" src="assets/cactus2.png" visibility="#game_state==2"/>
+
+        <!-- Original two-frame scrolling ground material. -->
+        <Image x="180" y="228" w="252" h="10" src="assets/ground2.png" visibility="#game_state==1">
+            <SourcesAnimation>
+                <Source src="assets/ground2.png" time="0"/>
+                <Source src="assets/ground3.png" time="90"/>
+                <Source src="assets/ground2.png" time="180"/>
+            </SourcesAnimation>
+        </Image>
+        <Image x="180" y="228" w="252" h="10" src="assets/ground2.png" visibility="#game_state!=1"/>
+        <Rectangle x="198" y="243" w="24" h="3" cornerRadius="1.5" fillColor="#4063B3FF"/>
+        <Rectangle x="232" y="243" w="10" h="3" cornerRadius="1.5" fillColor="#2863B3FF"/>
+        <Rectangle x="370" y="243" w="18" h="3" cornerRadius="1.5" fillColor="#2863B3FF"/>
+
+        <Text x="307" y="152" size="15" color="#FF92A9C4" text="轻触开始" align="center" visibility="#game_state==0" fontFamily="mipro-medium"/>
+        <Image x="235" y="140" w="144" h="11" src="assets/game_over.png" visibility="#game_state==2"/>
+        <Text x="307" y="168" size="13" color="#FF63B3FF" text="轻触重来" align="center" visibility="#game_state==2" fontFamily="mipro-medium"/>
+
+    </Group>
+
+    <!--
+      Root-level hit targets use the host's real view bounds. This mirrors official Smart Assistant
+      templates and avoids touch-coordinate mismatches caused by scaled visual Groups.
+    -->
+    <Group x="0" y="0" w="#view_width" h="#view_height" alpha="0"
+           visibility="eq(#game_state,0)" touchable="true" interceptTouch="true">
+        <Triggers>
+            <Trigger action="up">
+                <VariableCommand name="score" expression="0"/>
+                <VariableCommand name="jump_ready" expression="1"/>
+                <VariableCommand name="game_state" expression="1"/>
+                <AnimationCommand target="obstacle_x" command="play"/>
+            </Trigger>
+        </Triggers>
+    </Group>
+
+    <Group x="0" y="0" w="#view_width" h="#view_height" alpha="0"
+           visibility="eq(#game_state,1)" touchable="true" interceptTouch="true">
+        <Triggers>
+            <Trigger action="up">
+                <MultiCommand condition="#jump_ready">
+                    <VariableCommand name="jump_ready" expression="0"/>
+                    <SoundCommand sound="assets/sounds/jump.mp3" volume="0.55" loop="false" keepCur="false" condition="#sound_enabled"/>
+                    <AnimationCommand target="jump_y" command="play"/>
+                </MultiCommand>
+            </Trigger>
+        </Triggers>
+    </Group>
+
+    <Group x="0" y="0" w="#view_width" h="#view_height" alpha="0"
+           visibility="eq(#game_state,2)" touchable="true" interceptTouch="true">
+        <Triggers>
+            <Trigger action="up">
+                <VariableCommand name="score" expression="0"/>
+                <VariableCommand name="jump_ready" expression="1"/>
+                <VariableCommand name="game_state" expression="1"/>
+                <AnimationCommand target="obstacle_x" command="play"/>
+            </Trigger>
+        </Triggers>
+    </Group>
+
+    <!-- Topmost root-level SFX target, aligned proportionally with the visible switch. -->
+    <Rectangle x="(#view_width * 0.64)" y="(#view_height * 0.10)"
+               w="(#view_width * 0.20)" h="(#view_height * 0.20)"
+               fillColor="#01000000" touchable="true" interceptTouch="true">
+        <Triggers>
+            <Trigger action="up">
+                <VariableCommand name="sound_enabled" expression="!(#sound_enabled)"/>
+            </Trigger>
+        </Triggers>
+    </Rectangle>
+</Widget>

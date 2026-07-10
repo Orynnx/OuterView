@@ -1,0 +1,3 @@
+-keep public class hk.uwu.reareye.funcardcore.** { public protected *; }
+-keep class hk.uwu.reareye.funcardcore.hostapi.IFunCardHostService** { *; }
+-keep class hk.uwu.reareye.funcardcore.hostapi.IFunCardHostConnection** { *; }
