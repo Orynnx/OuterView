@@ -8,6 +8,10 @@ OuterView 是面向小米 17 Pro / 17 Pro Max 背屏的自定义 Smart Assistant
 
 当前版本：`2.2.0`，Host API：`v3`。
 
+## AI创作声明
+
+此项目中由GPT5.6-Sol自主完成编码和测试。不对软件的安全性、可用性和文档的正确性做任何形式的保证。如果担心 OuterView 您的设备，请不要安装 OuterView。请知悉 Orynnx 不承担由此带来的一切责任。
+
 ## 能做什么
 
 - 从系统文件选择器导入 Smart Assistant `Widget version="2"` ZIP。
