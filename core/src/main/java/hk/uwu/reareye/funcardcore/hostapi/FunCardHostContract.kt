@@ -1,7 +1,7 @@
 package hk.uwu.reareye.funcardcore.hostapi
 
 object FunCardHostContract {
-    const val API_VERSION = 3
+    const val API_VERSION = 4
     const val PROVIDER_PACKAGE = "org.orynnx.outerview"
     const val HOST_PACKAGE = "com.xiaomi.subscreencenter"
     const val ACTION_REQUEST_SERVICE =

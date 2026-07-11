@@ -146,6 +146,24 @@ class CustomRearCardHook : YukiBaseHooker() {
             return Bundle().apply { putParcelableArrayList(FunCardHostContract.Keys.ITEMS, items) }
         }
 
+        override fun synchronizeCards(): Bundle {
+            enforceCaller()
+            return runCatching {
+                val restored = restoreEnabledCards()
+                Bundle().apply {
+                    putBoolean(FunCardHostContract.Keys.SUCCESS, true)
+                    putString(FunCardHostContract.Keys.MESSAGE, "卡片状态已同步")
+                    putInt("restoredCount", restored)
+                }
+            }.getOrElse {
+                Bundle().apply {
+                    putBoolean(FunCardHostContract.Keys.SUCCESS, false)
+                    putString(FunCardHostContract.Keys.MESSAGE, it.message ?: "同步卡片状态失败")
+                    putString(FunCardHostContract.Keys.ERROR_CODE, "SYNCHRONIZE_FAILED")
+                }
+            }
+        }
+
         override fun installCard(request: Bundle?, zipFd: ParcelFileDescriptor?): Bundle {
             enforceCaller()
             val command = parseRequest(request)
@@ -619,23 +637,31 @@ class CustomRearCardHook : YukiBaseHooker() {
         val handler = Handler(Looper.getMainLooper())
         listOf(800L, 2_000L).forEach { delay ->
             handler.postDelayed({
-                cards.values.filter { it.enabled }.forEach { card ->
-                    if (managerContains(TESTER_PACKAGE, card.business)) return@forEach
-                    val command = CardCommand(
-                        card.cardId,
-                        card.business,
-                        card.displayName,
-                        card.sha256,
-                        card.notificationId,
-                        "restore_${System.currentTimeMillis()}",
-                        card.rearParam,
-                        card.focusParam,
-                    )
-                    runCatching { activateCardInHost(command, persist = false) }
-                        .onFailure { rememberError(card.business, command.commandId, it.message ?: "恢复失败") }
-                }
+                restoreEnabledCards()
             }, delay)
         }
+    }
+
+    private fun restoreEnabledCards(): Int {
+        check(manager != null) { "Smart Assistant manager 尚未就绪" }
+        var restored = 0
+        cards.values.filter { it.enabled }.forEach { card ->
+            if (managerContains(TESTER_PACKAGE, card.business)) return@forEach
+            val command = CardCommand(
+                card.cardId,
+                card.business,
+                card.displayName,
+                card.sha256,
+                card.notificationId,
+                "restore_${System.currentTimeMillis()}",
+                card.rearParam,
+                card.focusParam,
+            )
+            runCatching { activateCardInHost(command, persist = false) }
+                .onSuccess { restored++ }
+                .onFailure { rememberError(card.business, command.commandId, it.message ?: "恢复失败") }
+        }
+        return restored
     }
 
     private fun success(message: String, command: CardCommand, path: String? = null): Bundle =

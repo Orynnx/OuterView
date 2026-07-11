@@ -74,6 +74,10 @@ class FunCardHostClient {
         }
     }
 
+    fun synchronizeCards(): HostActionResult =
+        runCatching { HostActionResult.fromBundle(requireRemote().synchronizeCards()) }
+            .getOrElse { HostActionResult(false, it.message ?: "同步卡片状态失败", "REMOTE_ERROR") }
+
     fun installCard(request: Bundle, fd: ParcelFileDescriptor): HostActionResult =
         runCatching { HostActionResult.fromBundle(requireRemote().installCard(request, fd)) }
             .getOrElse { HostActionResult(false, it.message ?: "安装失败", "REMOTE_ERROR") }

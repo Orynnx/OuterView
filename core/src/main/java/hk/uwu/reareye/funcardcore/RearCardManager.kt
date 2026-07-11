@@ -18,7 +18,7 @@ class RearCardManager private constructor(context: Context) : RearCardManagement
     private val pendingImports = ConcurrentHashMap<String, PendingCardImport>()
 
     companion object {
-        const val API_VERSION = 3
+        const val API_VERSION = 4
         private const val MigrationPrefs = "rear_card_core_migrations"
         private const val LegacyProbeCleanupKey = "legacy_system_probes_cleaned_v2"
 

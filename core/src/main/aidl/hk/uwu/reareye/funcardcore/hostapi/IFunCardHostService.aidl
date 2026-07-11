@@ -7,6 +7,7 @@ interface IFunCardHostService {
     Bundle getCapabilities();
     Bundle listSystemTemplates();
     Bundle listHostCards();
+    Bundle synchronizeCards();
     Bundle installCard(in Bundle request, in ParcelFileDescriptor zipFd);
     Bundle activateCard(in Bundle request);
     Bundle deactivateCard(in Bundle request);

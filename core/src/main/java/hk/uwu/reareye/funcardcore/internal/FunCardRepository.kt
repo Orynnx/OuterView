@@ -29,7 +29,30 @@ object FunCardRepository {
 
     suspend fun loadCards(context: Context): List<CustomCardRecord> = withContext(Dispatchers.IO) {
         processPendingCleanup(context)
+        repairIncompleteDeployments(context)
+        synchronizeHostCards(context)
         reconcile(context, loadAll(context)).filterNot { it.deleted }
+    }
+
+    private suspend fun repairIncompleteDeployments(context: Context) {
+        loadAll(context)
+            .filter {
+                !it.deleted &&
+                    it.stateEnum == RearCardState.NOT_INSTALLED &&
+                    it.hostTemplatePath != null &&
+                    it.localFile.isFile
+            }
+            .forEach { installCard(context, it) }
+    }
+
+    private fun synchronizeHostCards(context: Context) {
+        val client = FunCardHostClient()
+        val caps = runCatching { client.connect(context) }.getOrNull()
+        try {
+            if (caps?.compatible == true && caps.managerCaptured) client.synchronizeCards()
+        } finally {
+            client.disconnect()
+        }
     }
 
     fun hasLegacyRegistry(context: Context): Boolean =
