@@ -139,9 +139,9 @@ class MainActivity : ComponentActivity() {
 }
 
 private enum class MainDestination(val label: String) {
-    ASSISTANT("Assistant"),
-    WALLPAPER("Wallpaper"),
-    ABOUT("About"),
+    ASSISTANT("助手卡片"),
+    WALLPAPER("背屏壁纸"),
+    ABOUT("关于"),
 }
 
 @Composable
@@ -150,9 +150,9 @@ private fun OuterViewApp() {
     Scaffold(
         bottomBar = {
             NavigationBar {
-                NavigationBarItem(destination == MainDestination.ASSISTANT, { destination = MainDestination.ASSISTANT }, { Icon(Icons.Rounded.Home, null) }, label = { Text("Assistant") })
-                NavigationBarItem(destination == MainDestination.WALLPAPER, { destination = MainDestination.WALLPAPER }, { Icon(Icons.Rounded.Wallpaper, null) }, label = { Text("Wallpaper") })
-                NavigationBarItem(destination == MainDestination.ABOUT, { destination = MainDestination.ABOUT }, { Icon(Icons.Rounded.Info, null) }, label = { Text("About") })
+                NavigationBarItem(destination == MainDestination.ASSISTANT, { destination = MainDestination.ASSISTANT }, { Icon(Icons.Rounded.Home, null) }, label = { Text("助手卡片") })
+                NavigationBarItem(destination == MainDestination.WALLPAPER, { destination = MainDestination.WALLPAPER }, { Icon(Icons.Rounded.Wallpaper, null) }, label = { Text("背屏壁纸") })
+                NavigationBarItem(destination == MainDestination.ABOUT, { destination = MainDestination.ABOUT }, { Icon(Icons.Rounded.Info, null) }, label = { Text("关于") })
             }
         },
     ) { padding ->
@@ -180,7 +180,7 @@ private fun OuterViewApp() {
 @Composable
 private fun AboutApp() {
     val uriHandler = LocalUriHandler.current
-    Scaffold(topBar = { TopAppBar(title = { Text("About", fontWeight = FontWeight.SemiBold) }) }) { padding ->
+    Scaffold(topBar = { TopAppBar(title = { Text("关于", fontWeight = FontWeight.SemiBold) }) }) { padding ->
         Column(
             Modifier.fillMaxSize().padding(padding).padding(20.dp).animateContentSize(),
             verticalArrangement = Arrangement.spacedBy(16.dp),
@@ -192,8 +192,8 @@ private fun AboutApp() {
             ) {
                 Column(Modifier.padding(22.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text("OuterView", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
-                    Text("基于 REAREye 的小米背屏管理工具", style = MaterialTheme.typography.titleMedium)
-                    Text("作者：凛野", color = MaterialTheme.colorScheme.onPrimaryContainer)
+                    Text("面向小米背屏的管理工具\n鸣谢 REAREye 项目提供的探索与启发", style = MaterialTheme.typography.titleMedium)
+                    Text("开发者：凛野", color = MaterialTheme.colorScheme.onPrimaryContainer)
                 }
             }
             Card(
@@ -202,12 +202,12 @@ private fun AboutApp() {
                 modifier = Modifier.fillMaxWidth(),
             ) {
                 Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
-                    Text("GitHub 仓库", fontWeight = FontWeight.SemiBold)
+                    Text("开源项目主页", fontWeight = FontWeight.SemiBold)
                     Text("github.com/Orynnx/OuterView", color = MaterialTheme.colorScheme.primary)
                 }
             }
             Text("版本 ${BuildConfig.VERSION_NAME}", color = MaterialTheme.colorScheme.onSurfaceVariant)
-            Text("Assistant 卡片、背屏壁纸与系统加载链路由 OuterView 统一管理。")
+            Text("统一管理助手卡片、背屏壁纸及其显示设置。")
         }
     }
 }
