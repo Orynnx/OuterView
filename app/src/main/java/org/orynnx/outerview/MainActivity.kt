@@ -1,11 +1,21 @@
 package org.orynnx.outerview
 
 import android.os.Bundle
+import android.os.ParcelFileDescriptor
+import android.util.Log
 import android.provider.OpenableColumns
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -26,10 +36,12 @@ import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material.icons.rounded.DeleteSweep
 import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.Info
+import androidx.compose.material.icons.rounded.Home
 import androidx.compose.material.icons.rounded.MoreVert
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Replay
 import androidx.compose.material.icons.rounded.WarningAmber
+import androidx.compose.material.icons.rounded.Wallpaper
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -44,6 +56,8 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.NavigationBar
+import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
@@ -60,11 +74,13 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -75,12 +91,124 @@ import hk.uwu.reareye.funcardcore.RearCardActionResult
 import hk.uwu.reareye.funcardcore.RearCardManager
 import hk.uwu.reareye.funcardcore.RearCardManagerCapabilities
 import hk.uwu.reareye.funcardcore.RearCardState
+import hk.uwu.reareye.funcardcore.wallpaperapi.RearWallpaperHostClient
+import hk.uwu.reareye.funcardcore.wallpaperapi.RearWallpaperHostContract
 import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        setContent { FunCardManagerTheme { FunCardManagerApp() } }
+        runDebugWallpaperAction()
+        setContent {
+            FunCardManagerTheme {
+                OuterViewApp()
+            }
+        }
+    }
+
+    private fun runDebugWallpaperAction() {
+        if (!BuildConfig.DEBUG) return
+        val action = intent?.action ?: return
+        if (action !in setOf("org.orynnx.outerview.DEBUG_APPLY_WALLPAPER", "org.orynnx.outerview.DEBUG_IMPORT_WALLPAPER", "org.orynnx.outerview.DEBUG_RENAME_WALLPAPER")) return
+        Thread {
+            val client = RearWallpaperHostClient()
+            val result = runCatching {
+                check(client.connect(applicationContext)) { "wallpaper host not connected" }
+                when (action) {
+                    "org.orynnx.outerview.DEBUG_APPLY_WALLPAPER" -> {
+                        val wallpaperId = intent.getIntExtra("wallpaperId", Int.MIN_VALUE)
+                        check(wallpaperId != Int.MIN_VALUE) { "missing wallpaperId" }
+                        client.apply(wallpaperId)
+                    }
+                    "org.orynnx.outerview.DEBUG_RENAME_WALLPAPER" -> {
+                        val wallpaperId = intent.getIntExtra("wallpaperId", Int.MIN_VALUE)
+                        check(wallpaperId != Int.MIN_VALUE) { "missing wallpaperId" }
+                        client.rename(wallpaperId, intent.getStringExtra("name").orEmpty())
+                    }
+                    else -> {
+                        val path = intent.getStringExtra("path") ?: error("missing path")
+                        ParcelFileDescriptor.open(java.io.File(path), ParcelFileDescriptor.MODE_READ_ONLY).use {
+                            client.import(it, java.io.File(path).name)
+                        }
+                    }
+                }
+            }.getOrElse { Bundle().apply { putBoolean(RearWallpaperHostContract.Keys.SUCCESS, false); putString(RearWallpaperHostContract.Keys.MESSAGE, it.message) } }
+            Log.i("OuterView-Wallpaper-Test", "action=$action id=${result.getInt(RearWallpaperHostContract.Keys.WALLPAPER_ID, Int.MIN_VALUE)} success=${result.getBoolean(RearWallpaperHostContract.Keys.SUCCESS)} message=${result.getString(RearWallpaperHostContract.Keys.MESSAGE)}")
+        }.start()
+    }
+}
+
+private enum class MainDestination(val label: String) {
+    ASSISTANT("Assistant"),
+    WALLPAPER("Wallpaper"),
+    ABOUT("About"),
+}
+
+@Composable
+private fun OuterViewApp() {
+    var destination by rememberSaveable { mutableStateOf(MainDestination.ASSISTANT) }
+    Scaffold(
+        bottomBar = {
+            NavigationBar {
+                NavigationBarItem(destination == MainDestination.ASSISTANT, { destination = MainDestination.ASSISTANT }, { Icon(Icons.Rounded.Home, null) }, label = { Text("Assistant") })
+                NavigationBarItem(destination == MainDestination.WALLPAPER, { destination = MainDestination.WALLPAPER }, { Icon(Icons.Rounded.Wallpaper, null) }, label = { Text("Wallpaper") })
+                NavigationBarItem(destination == MainDestination.ABOUT, { destination = MainDestination.ABOUT }, { Icon(Icons.Rounded.Info, null) }, label = { Text("About") })
+            }
+        },
+    ) { padding ->
+        Box(Modifier.fillMaxSize().padding(padding)) {
+            AnimatedContent(
+                targetState = destination,
+                transitionSpec = {
+                    val direction = if (targetState.ordinal >= initialState.ordinal) 1 else -1
+                    (slideInHorizontally(tween(360)) { it / 7 * direction } + fadeIn(tween(260)))
+                        .togetherWith(slideOutHorizontally(tween(280)) { -it / 9 * direction } + fadeOut(tween(180)))
+                },
+                label = "main-navigation",
+            ) { page ->
+                when (page) {
+                    MainDestination.ASSISTANT -> FunCardManagerApp()
+                    MainDestination.WALLPAPER -> RearWallpaperManagerApp()
+                    MainDestination.ABOUT -> AboutApp()
+                }
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun AboutApp() {
+    val uriHandler = LocalUriHandler.current
+    Scaffold(topBar = { TopAppBar(title = { Text("About", fontWeight = FontWeight.SemiBold) }) }) { padding ->
+        Column(
+            Modifier.fillMaxSize().padding(padding).padding(20.dp).animateContentSize(),
+            verticalArrangement = Arrangement.spacedBy(16.dp),
+        ) {
+            Surface(
+                shape = RoundedCornerShape(24.dp),
+                color = MaterialTheme.colorScheme.primaryContainer,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Column(Modifier.padding(22.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("OuterView", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
+                    Text("基于 REAREye 的小米背屏管理工具", style = MaterialTheme.typography.titleMedium)
+                    Text("作者：凛野", color = MaterialTheme.colorScheme.onPrimaryContainer)
+                }
+            }
+            Card(
+                onClick = { uriHandler.openUri("https://github.com/Orynnx/OuterView") },
+                shape = RoundedCornerShape(20.dp),
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
+                    Text("GitHub 仓库", fontWeight = FontWeight.SemiBold)
+                    Text("github.com/Orynnx/OuterView", color = MaterialTheme.colorScheme.primary)
+                }
+            }
+            Text("版本 ${BuildConfig.VERSION_NAME}", color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text("Assistant 卡片、背屏壁纸与系统加载链路由 OuterView 统一管理。")
+        }
     }
 }
 
@@ -393,7 +521,7 @@ private fun CompactCardRow(
     Card(
         shape = RoundedCornerShape(8.dp),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer),
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier.fillMaxWidth().animateContentSize(),
     ) {
         Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
