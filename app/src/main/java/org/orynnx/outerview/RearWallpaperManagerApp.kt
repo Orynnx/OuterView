@@ -79,16 +79,16 @@ fun RearWallpaperManagerApp() {
     }
     LaunchedEffect(Unit) { refresh() }
     Scaffold(
-        topBar = { TopAppBar(title = { Text("Wallpaper", fontWeight = FontWeight.SemiBold) }, actions = { IconButton(onClick = { scope.launch { refresh() } }, enabled = !busy) { Icon(Icons.Rounded.Refresh, "刷新") } }) },
+        topBar = { TopAppBar(title = { Text("背屏壁纸", fontWeight = FontWeight.SemiBold) }, actions = { IconButton(onClick = { scope.launch { refresh() } }, enabled = !busy) { Icon(Icons.Rounded.Refresh, "刷新") } }) },
         snackbarHost = { SnackbarHost(snackbar) },
         floatingActionButton = { IconButton(onClick = { picker.launch(arrayOf("application/zip", "application/octet-stream", "*/*")) }, enabled = !busy) { Icon(Icons.Rounded.Add, "导入壁纸") } },
     ) { padding ->
         LazyColumn(Modifier.fillMaxSize().padding(padding).padding(12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            item { Text("这里只显示由 OuterView 导入和管理的壁纸。", style = MaterialTheme.typography.bodySmall) }
+            item { Text("此处仅显示通过 OuterView 添加的壁纸。", style = MaterialTheme.typography.bodySmall) }
             if (entries.isEmpty()) item { Text("还没有 OuterView 壁纸。", modifier = Modifier.padding(top = 24.dp)) }
             items(entries, key = { it.wallpaperId }) { item -> Card(Modifier.fillMaxWidth().animateContentSize()) { Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text(item.name, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                Text("OuterView 管理", style = MaterialTheme.typography.bodySmall)
+                Text("由 OuterView 管理", style = MaterialTheme.typography.bodySmall)
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
                     ElevatedButton(onClick = { runAction { client.apply(item.wallpaperId) } }, enabled = !busy) { Text(if (item.current) "当前壁纸" else "应用") }
                     TextButton(onClick = { renameTarget = item; renameName = item.name }, enabled = !busy) { Icon(Icons.Rounded.Edit, null); Spacer(Modifier.width(4.dp)); Text("重命名") }
