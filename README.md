@@ -50,7 +50,7 @@ docs/                架构、二次开发与卡片适配文档
 
 ## 构建
 
-要求 JDK 17、Android SDK 37：
+要求 JDK 17、Android SDK 36：
 
 Windows PowerShell：
 

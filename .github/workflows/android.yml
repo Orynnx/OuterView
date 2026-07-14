@@ -21,8 +21,8 @@ jobs:
           java-version: "17"
           cache: gradle
       - uses: android-actions/setup-android@v3
-      - name: Install Android SDK 37
-        run: sdkmanager "platforms;android-37" "build-tools;37.0.0"
+      - name: Install Android SDK 36
+        run: sdkmanager "platforms;android-36" "build-tools;36.0.0"
       - name: Verify Dino Run package
         run: python demo/dino-run/build_demo.py --check
       - name: Test and build

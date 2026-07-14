@@ -17,7 +17,7 @@ The ready-to-import [Dino Run demo](demo/dino-run/dino-run.zip) is included.
 
 ## Build
 
-JDK 17 and Android SDK 37 are required.
+JDK 17 and Android SDK 36 are required.
 
 ```bash
 ./gradlew :core:testDebugUnitTest :app:assembleDebug
