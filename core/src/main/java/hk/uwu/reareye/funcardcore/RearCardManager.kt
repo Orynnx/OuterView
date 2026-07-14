@@ -10,6 +10,8 @@ import hk.uwu.reareye.funcardcore.internal.FunCardNotificationController
 import hk.uwu.reareye.funcardcore.internal.FunCardRepository
 import hk.uwu.reareye.funcardcore.internal.PendingCardImport
 import hk.uwu.reareye.funcardcore.internal.RearCardWorkflow
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 
@@ -18,27 +20,30 @@ class RearCardManager private constructor(context: Context) : RearCardManagement
     private val pendingImports = ConcurrentHashMap<String, PendingCardImport>()
 
     companion object {
-        const val API_VERSION = 4
+        const val API_VERSION = 5
         private const val MigrationPrefs = "rear_card_core_migrations"
         private const val LegacyProbeCleanupKey = "legacy_system_probes_cleaned_v2"
+        private val operationMutex = Mutex()
 
         @JvmStatic
         fun create(context: Context): RearCardManager = RearCardManager(context)
     }
 
-    override suspend fun refresh(): RearCardManagerSnapshot = runCatching {
-        cleanupLegacySystemProbesOnce()
-        val cards = FunCardRepository.loadCards(appContext).map(CustomCardRecord::toPublic)
-        val capabilities = FunCardRepository.capabilities(appContext).toPublic()
-        RearCardManagerSnapshot(
-            capabilities = capabilities,
-            cards = cards,
-            hasLegacyArtifacts = FunCardRepository.hasLegacyRegistry(appContext),
-        )
-    }.getOrElse {
-        RearCardManagerSnapshot(
-            error = it.message ?: "刷新卡片状态失败",
-        )
+    override suspend fun refresh(): RearCardManagerSnapshot = operationMutex.withLock {
+        runCatching {
+            cleanupLegacySystemProbesOnce()
+            val cards = FunCardRepository.loadCards(appContext).map(CustomCardRecord::toPublic)
+            val capabilities = FunCardRepository.capabilities(appContext).toPublic()
+            RearCardManagerSnapshot(
+                capabilities = capabilities,
+                cards = cards,
+                hasLegacyArtifacts = FunCardRepository.hasLegacyRegistry(appContext),
+            )
+        }.getOrElse {
+            RearCardManagerSnapshot(
+                error = it.message ?: "刷新卡片状态失败",
+            )
+        }
     }
 
     override suspend fun inspectImport(
@@ -59,13 +64,13 @@ class RearCardManager private constructor(context: Context) : RearCardManagement
         pendingImports.remove(token)?.stagedFile?.delete()
     }
 
-    override suspend fun importAndInstall(token: String): RearCardActionResult {
+    override suspend fun importAndInstall(token: String): RearCardActionResult = operationMutex.withLock {
         val pending = pendingImports.remove(token)
-            ?: return failure("导入会话已失效，请重新选择 ZIP", "IMPORT_TOKEN_EXPIRED")
+            ?: return@withLock failure("导入会话已失效，请重新选择 ZIP", "IMPORT_TOKEN_EXPIRED")
         val hashes = FunCardRepository.listSystemTemplates(appContext)
             .mapNotNull { it.sha256.takeIf(String::isNotBlank) }
             .toSet()
-        return runCatching {
+        runCatching {
             RearCardWorkflow.importAndInstall(
                 commit = { FunCardRepository.commitImport(appContext, pending, hashes) },
                 install = { FunCardRepository.installCard(appContext, it) },
@@ -73,10 +78,10 @@ class RearCardManager private constructor(context: Context) : RearCardManagement
         }.getOrElse { failure(it.message ?: "导入安装失败", "IMPORT_INSTALL_FAILED") }
     }
 
-    override suspend fun replaceAndInstall(cardId: String, token: String): RearCardActionResult {
+    override suspend fun replaceAndInstall(cardId: String, token: String): RearCardActionResult = operationMutex.withLock {
         val pending = pendingImports.remove(token)
-            ?: return failure("导入会话已失效，请重新选择 ZIP", "IMPORT_TOKEN_EXPIRED")
-        return runCatching {
+            ?: return@withLock failure("导入会话已失效，请重新选择 ZIP", "IMPORT_TOKEN_EXPIRED")
+        runCatching {
             val systemHashes = FunCardRepository.listSystemTemplates(appContext)
                 .mapNotNull { it.sha256.takeIf(String::isNotBlank) }
                 .toSet()
@@ -149,8 +154,10 @@ class RearCardManager private constructor(context: Context) : RearCardManagement
             ?: error("卡片不存在或已删除")
 
     private suspend fun action(operation: suspend () -> CardOperationResult): RearCardActionResult =
-        runCatching { operation().toPublic() }.getOrElse {
-            failure(it.message ?: "卡片操作失败", "CORE_OPERATION_FAILED")
+        operationMutex.withLock {
+            runCatching { operation().toPublic() }.getOrElse {
+                failure(it.message ?: "卡片操作失败", "CORE_OPERATION_FAILED")
+            }
         }
 
     private fun failure(message: String, code: String) = RearCardActionResult(

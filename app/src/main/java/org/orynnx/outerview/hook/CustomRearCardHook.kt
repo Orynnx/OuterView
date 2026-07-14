@@ -13,6 +13,7 @@ import android.os.Handler
 import android.os.Looper
 import android.os.ParcelFileDescriptor
 import android.os.Process
+import android.util.AtomicFile
 import com.highcapable.kavaref.KavaRef.Companion.asResolver
 import com.highcapable.kavaref.KavaRef.Companion.resolve
 import com.highcapable.yukihookapi.hook.entity.YukiBaseHooker
@@ -38,10 +39,14 @@ import org.luckypray.dexkit.result.FieldData
 import org.luckypray.dexkit.result.MethodData
 import java.io.File
 import java.lang.reflect.Modifier
+import java.util.Collections
 import java.util.UUID
+import java.util.WeakHashMap
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.atomic.AtomicReference
 import java.util.zip.ZipFile
 
@@ -56,6 +61,7 @@ class CustomRearCardHook : YukiBaseHooker() {
         val notificationId: Int,
         val updatedAt: Long,
         val enabled: Boolean = false,
+        val pendingDelete: Boolean = false,
         val rearParam: String = "{}",
         val focusParam: String = "{}",
     )
@@ -71,6 +77,19 @@ class CustomRearCardHook : YukiBaseHooker() {
         val lastError: String? = null,
         val runtimeActivated: Boolean = false,
     )
+
+    private data class RuntimeWidgetIdentity(
+        val notificationId: Int,
+        val compositeKey: String,
+    )
+
+    private data class PostRunnableObservation(
+        val packageName: String,
+        val notificationId: Int,
+        val extras: Bundle,
+    )
+
+    private enum class RuntimePresence { PRESENT, ABSENT, UNKNOWN }
 
     companion object {
         private const val TAG = "FunCardManager-Hook"
@@ -97,6 +116,17 @@ class CustomRearCardHook : YukiBaseHooker() {
     private val providerInstanceId = UUID.randomUUID().toString()
     private val cards = ConcurrentHashMap<String, HostCard>()
     private val evidence = ConcurrentHashMap<String, RuntimeEvidence>()
+    private val suppressedBusinesses = ConcurrentHashMap.newKeySet<String>()
+    private val installingBusinesses = ConcurrentHashMap.newKeySet<String>()
+    private val pendingBulkBusinesses = ConcurrentHashMap.newKeySet<String>()
+    private val pendingBulkTemplates = ConcurrentHashMap.newKeySet<String>()
+    private val operationEpochs = ConcurrentHashMap<String, AtomicLong>()
+    private val pendingPostRunnables = Collections.synchronizedMap(
+        WeakHashMap<Any, PostRunnableObservation>(),
+    )
+    private val lifecycleLock = Any()
+    private val registryLock = Any()
+    private val runtimeReconcileScheduled = AtomicBoolean(false)
 
     @Volatile private var hostContext: Context? = null
     @Volatile private var manager: Any? = null
@@ -168,9 +198,13 @@ class CustomRearCardHook : YukiBaseHooker() {
             enforceCaller()
             val command = parseRequest(request)
             val fd = zipFd ?: return failure("MISSING_FD", "没有收到模板文件", command)
+            val target = managedTemplateFile(command.cardId)
+            val temp = File(target.parentFile, ".${target.name}.${Process.myPid()}.tmp")
+            val installEpoch = synchronized(lifecycleLock) {
+                installingBusinesses.add(command.business)
+                nextOperationEpoch(command.business)
+            }
             return runCatching {
-                val target = managedTemplateFile(command.cardId)
-                val temp = File(target.parentFile, ".${target.name}.${Process.myPid()}.tmp")
                 var total = 0L
                 ParcelFileDescriptor.AutoCloseInputStream(fd).use { input ->
                     temp.outputStream().use { output ->
@@ -185,36 +219,48 @@ class CustomRearCardHook : YukiBaseHooker() {
                     }
                 }
                 validateTemplate(temp)
-                if (target.exists()) check(target.delete()) { "无法替换旧模板" }
-                check(temp.renameTo(target) || runCatching {
-                    temp.copyTo(target, overwrite = true)
-                    temp.delete()
-                    true
-                }.getOrDefault(false)) { "模板部署失败" }
-                target.setReadable(true, false)
-                val card = HostCard(
-                    cardId = command.cardId,
-                    business = command.business,
-                    displayName = command.displayName,
-                    templatePath = target.absolutePath,
-                    sha256 = command.sha256,
-                    notificationId = command.notificationId,
-                    updatedAt = System.currentTimeMillis(),
-                )
-                cards[card.cardId] = card
-                writeRegistry()
-                evidence[card.business] = RuntimeEvidence(
-                    actualTemplatePath = card.templatePath,
-                    lastCommandId = command.commandId,
-                    lastEventAt = System.currentTimeMillis(),
-                )
+                val card = synchronized(lifecycleLock) {
+                    check(currentOperationEpoch(command.business) == installEpoch) {
+                        "模板安装已被较新的删除操作取消"
+                    }
+                    if (target.exists()) check(target.delete()) { "无法替换旧模板" }
+                    check(temp.renameTo(target) || runCatching {
+                        temp.copyTo(target, overwrite = true)
+                        temp.delete()
+                        true
+                    }.getOrDefault(false)) { "模板部署失败" }
+                    target.setReadable(true, false)
+                    val installed = HostCard(
+                        cardId = command.cardId,
+                        business = command.business,
+                        displayName = command.displayName,
+                        templatePath = target.absolutePath,
+                        sha256 = command.sha256,
+                        notificationId = command.notificationId,
+                        updatedAt = System.currentTimeMillis(),
+                    )
+                    pendingBulkBusinesses.remove(command.business)
+                    pendingBulkTemplates.remove(target.absolutePath)
+                    suppressedBusinesses.remove(command.business)
+                    cards[installed.cardId] = installed
+                    writeRegistry()
+                    evidence[installed.business] = RuntimeEvidence(
+                        actualTemplatePath = installed.templatePath,
+                        lastCommandId = command.commandId,
+                        lastEventAt = System.currentTimeMillis(),
+                    )
+                    installed
+                }
                 log("install", command, true, "deployed=${card.templatePath}")
                 success("模板已部署到宿主", command, card.templatePath)
             }.getOrElse {
                 runCatching { fd.close() }
+                runCatching { temp.delete() }
                 rememberError(command.business, command.commandId, it.message ?: "安装失败")
                 log("install", command, false, it.message.orEmpty())
                 failure("INSTALL_FAILED", it.message ?: "安装失败", command)
+            }.also {
+                installingBusinesses.remove(command.business)
             }
         }
 
@@ -222,16 +268,31 @@ class CustomRearCardHook : YukiBaseHooker() {
             enforceCaller()
             val command = parseRequest(request)
             return runCatching {
-                removeBusinessAndAwait(command.business)
-                val card = cards[command.cardId]
-                val target = card?.templatePath?.let(::File) ?: managedTemplateFile(command.cardId)
+                val target = cards[command.cardId]?.templatePath?.let(::File)
+                    ?: managedTemplateFile(command.cardId)
                 require(isManagedTemplate(target)) { "拒绝删除非托管路径" }
-                if (target.exists()) check(target.delete()) { "删除宿主模板失败" }
-                cards.remove(command.cardId)
-                writeRegistry()
-                evidence.remove(command.business)
-                log("uninstall", command, true, "removed=${target.absolutePath}")
-                success("宿主模板已卸载", command)
+                synchronized(lifecycleLock) {
+                    nextOperationEpoch(command.business)
+                    suppressedBusinesses.add(command.business)
+                    cards[command.cardId]?.let { card ->
+                        cards[command.cardId] = card.copy(
+                            enabled = false,
+                            pendingDelete = true,
+                            updatedAt = System.currentTimeMillis(),
+                        )
+                        writeRegistry()
+                    }
+                }
+                submitRuntimeRemoval(command.business)
+                val completed = finalizePendingDeletion(command.cardId, command.business)
+                if (!completed) schedulePendingDeletionCleanup(command.cardId, command.business)
+                log("uninstall", command, true, "pending=${!completed} target=${target.absolutePath}")
+                success(
+                    if (completed) "宿主模板已安全删除" else "删除请求已提交；Runtime 退出后将安全清理宿主模板",
+                    command,
+                ).apply {
+                    putBoolean(FunCardHostContract.Keys.CLEANUP_PENDING, !completed)
+                }
             }.getOrElse {
                 rememberError(command.business, command.commandId, it.message ?: "卸载失败")
                 failure("UNINSTALL_FAILED", it.message ?: "卸载失败", command)
@@ -243,22 +304,51 @@ class CustomRearCardHook : YukiBaseHooker() {
             val commandId = request?.getString(FunCardHostContract.Keys.COMMAND_ID).orEmpty()
                 .ifBlank { "delete_all_${System.currentTimeMillis()}" }
             return runCatching {
-                val snapshot = cards.values.toList()
                 val runtimeBusinesses = managerOuterViewBusinesses()
-                val businesses = (snapshot.map { it.business } + runtimeBusinesses).toSet()
-                businesses.forEach(::removeBusinessAndAwait)
-                File(templateBase()).listFiles().orEmpty().forEach { target ->
-                    if (isManagedTemplate(target) && target.exists()) {
-                        check(target.delete()) { "删除宿主模板失败：${target.name}" }
+                val (snapshot, businesses) = synchronized(lifecycleLock) {
+                    val currentCards = cards.values.toList()
+                    val cleanupTargets = File(templateBase()).listFiles().orEmpty()
+                        .filter(::isManagedTemplate)
+                        .map { it.absolutePath }
+                        .toSet()
+                    val ownedBusinesses = (
+                        currentCards.map { it.business } + runtimeBusinesses +
+                            cleanupTargets.map { File(it).name }
+                        ).toSet()
+                    currentCards.forEach { card ->
+                        nextOperationEpoch(card.business)
+                        suppressedBusinesses.add(card.business)
+                        cards[card.cardId] = card.copy(
+                            enabled = false,
+                            pendingDelete = true,
+                            updatedAt = System.currentTimeMillis(),
+                        )
+                    }
+                    suppressedBusinesses.addAll(ownedBusinesses)
+                    pendingBulkBusinesses.addAll(ownedBusinesses)
+                    pendingBulkTemplates.addAll(cleanupTargets)
+                    // Disable first so scheduled restoration cannot race cleanup.
+                    writeRegistry()
+                    currentCards to ownedBusinesses
+                }
+                businesses.forEach(::submitRuntimeRemoval)
+                snapshot.forEach { card ->
+                    if (!finalizePendingDeletion(card.cardId, card.business)) {
+                        schedulePendingDeletionCleanup(card.cardId, card.business)
                     }
                 }
-                businesses.forEach(evidence::remove)
-                cards.clear()
-                writeRegistry()
+                val bulkComplete = cleanupPendingBulk()
+                if (!bulkComplete) scheduleDeleteAllCleanup()
+                val pending = !bulkComplete || cards.values.any { it.pendingDelete }
                 Bundle().apply {
                     putBoolean(FunCardHostContract.Keys.SUCCESS, true)
-                    putString(FunCardHostContract.Keys.MESSAGE, "已清理 ${businesses.size} 张背屏卡片")
+                    putString(
+                        FunCardHostContract.Keys.MESSAGE,
+                        if (pending) "已提交 ${businesses.size} 张背屏卡片的安全清理"
+                        else "已安全删除 ${businesses.size} 张背屏卡片",
+                    )
                     putString(FunCardHostContract.Keys.COMMAND_ID, commandId)
+                    putBoolean(FunCardHostContract.Keys.CLEANUP_PENDING, pending)
                 }
             }.getOrElse {
                 Bundle().apply {
@@ -369,6 +459,19 @@ class CustomRearCardHook : YukiBaseHooker() {
                 manager = instance
                 YLog.info("[$TAG] manager captured cards=${cards.size}")
                 scheduleEnabledCardRestore()
+                cards.values.filter { it.pendingDelete }.forEach { card ->
+                    runCatching { submitRuntimeRemoval(card.business) }
+                        .onFailure { YLog.warn("[$TAG] startup pending delete failed business=${card.business}", it) }
+                    schedulePendingDeletionCleanup(card.cardId, card.business)
+                }
+                if (pendingBulkBusinesses.isNotEmpty() || pendingBulkTemplates.isNotEmpty()) {
+                    pendingBulkBusinesses.forEach { business ->
+                        suppressedBusinesses.add(business)
+                        runCatching { submitRuntimeRemoval(business) }
+                            .onFailure { YLog.warn("[$TAG] startup bulk cleanup failed business=$business", it) }
+                    }
+                    scheduleDeleteAllCleanup()
+                }
             }
         }.onFailure { YLog.error("[$TAG] manager hook failed", it) }
 
@@ -417,26 +520,20 @@ class CustomRearCardHook : YukiBaseHooker() {
                 val packageName = args.getOrNull(2) as? String ?: return@after
                 if (packageName != TESTER_PACKAGE) return@after
                 val extras = args.getOrNull(4) as? Bundle ?: return@after
-                val business = parseBusiness(extras) ?: return@after
-                val old = evidence[business] ?: RuntimeEvidence()
-                val directRuntime = extras.getBoolean(DIRECT_RUNTIME_MARKER)
-                evidence[business] = old.copy(
-                    notificationSeen = !directRuntime,
-                    runtimeActivated = directRuntime || old.runtimeActivated,
-                    lastEventAt = System.currentTimeMillis(),
+                pendingPostRunnables[instance] = PostRunnableObservation(
+                    packageName = packageName,
+                    notificationId = (args.getOrNull(1) as? Int) ?: extras.getInt("notification_id", 0),
+                    extras = Bundle(extras),
                 )
-                cards.values.firstOrNull { it.business == business }?.let { card ->
-                    cards[card.cardId] = card.copy(
-                        enabled = true,
-                        rearParam = extras.getString("miui.rear.param").orEmpty(),
-                        focusParam = extras.getString("miui.focus.param").orEmpty(),
-                        updatedAt = System.currentTimeMillis(),
-                    )
-                    runCatching(::writeRegistry)
-                }
-                YLog.info("[$TAG] notification seen business=$business id=${args.getOrNull(1)}")
             }
-        }.onFailure { YLog.error("[$TAG] notification observer failed", it) }
+            className.toClass().resolve().firstMethod {
+                name = "run"
+                parameterCount = 0
+            }.hook().after {
+                val observation = pendingPostRunnables.remove(instance) ?: return@after
+                handlePostRunnableCompleted(observation)
+            }
+        }.onFailure { YLog.error("[$TAG] notification runnable observer failed", it) }
 
         runCatching {
             val point = resolveNotificationWidgetApplyMethod()
@@ -451,19 +548,118 @@ class CustomRearCardHook : YukiBaseHooker() {
                 val path = extractField(instance, resolveNotificationWidgetTemplatePathFieldName()) as? String
                     ?: businessPath(business)
                 val readable = path?.let { File(it).isFile && File(it).canRead() } == true
-                val old = evidence[business] ?: RuntimeEvidence()
-                evidence[business] = old.copy(
-                    liveWidgetContains = true,
-                    loadAttempted = true,
-                    loadSucceeded = readable,
-                    runtimeActivated = true,
-                    actualTemplatePath = path,
-                    lastEventAt = System.currentTimeMillis(),
-                    lastError = if (readable) null else "MAML 模板路径不可读",
-                )
+                val accepted = synchronized(lifecycleLock) {
+                    if (business in suppressedBusinesses ||
+                        cards.values.any { it.business == business && it.pendingDelete }
+                    ) {
+                        false
+                    } else {
+                        val old = evidence[business] ?: RuntimeEvidence()
+                        evidence[business] = old.copy(
+                            liveWidgetContains = true,
+                            loadAttempted = true,
+                            loadSucceeded = readable,
+                            runtimeActivated = true,
+                            actualTemplatePath = path,
+                            lastEventAt = System.currentTimeMillis(),
+                            lastError = if (readable) null else "MAML 模板路径不可读",
+                        )
+                        dispatchRuntimeEvent(business, "widget_applied")
+                        true
+                    }
+                }
+                if (!accepted) {
+                    scheduleSuppressedRuntimeEject(business, extras)
+                    YLog.info("[$TAG] ignored late widget callback business=$business")
+                    return@after
+                }
                 YLog.info("[$TAG] widget applied business=$business path=$path readable=$readable")
             }
         }.onFailure { YLog.error("[$TAG] widget observer failed", it) }
+
+        installRuntimeRemovalObservers()
+    }
+
+    private fun handlePostRunnableCompleted(observation: PostRunnableObservation) {
+        if (observation.packageName != TESTER_PACKAGE) return
+        val extras = observation.extras
+        val business = parseBusiness(extras) ?: return
+        val directRuntime = extras.getBoolean(DIRECT_RUNTIME_MARKER)
+        val accepted = synchronized(lifecycleLock) {
+            if (business in suppressedBusinesses ||
+                cards.values.any { it.business == business && it.pendingDelete }
+            ) {
+                false
+            } else {
+                val old = evidence[business] ?: RuntimeEvidence()
+                evidence[business] = old.copy(
+                    notificationSeen = !directRuntime,
+                    runtimeActivated = directRuntime || old.runtimeActivated,
+                    lastEventAt = System.currentTimeMillis(),
+                )
+                // Direct activation is not committed until activateCardInHost persists
+                // enabled=true.  That method emits the single authoritative event.
+                if (!directRuntime) dispatchRuntimeEvent(business, "notification_observed")
+                true
+            }
+        }
+        if (!accepted) {
+            scheduleSuppressedRuntimeEject(business, extras)
+            YLog.info("[$TAG] ejected late completed runnable business=$business")
+            return
+        }
+        YLog.info("[$TAG] notification runnable completed business=$business id=${observation.notificationId}")
+    }
+
+    private fun installRuntimeRemovalObservers() {
+        runCatching {
+            val point = resolveRemoveNotificationMethod()
+            point.className.toClass().resolve().firstMethod {
+                name = point.methodName
+                parameterCount = 3
+            }.hook().after { scheduleRuntimeRemovalReconcile() }
+        }.onFailure { YLog.error("[$TAG] notification removal observer failed", it) }
+
+        runCatching {
+            val point = resolveRemoveCompositeMethod()
+            point.className.toClass().resolve().firstMethod {
+                name = point.methodName
+                parameterCount = 3
+            }.hook().after { scheduleRuntimeRemovalReconcile() }
+        }.onFailure { YLog.error("[$TAG] composite removal observer failed", it) }
+
+        runCatching {
+            val point = resolveRemoveBusinessMethod()
+            point.className.toClass().resolve().firstMethod {
+                name = point.methodName
+                parameterCount = 2
+            }.hook().after { scheduleRuntimeRemovalReconcile() }
+        }.onFailure { YLog.error("[$TAG] business removal observer failed", it) }
+    }
+
+    private fun scheduleRuntimeRemovalReconcile() {
+        if (!runtimeReconcileScheduled.compareAndSet(false, true)) return
+        Handler(Looper.getMainLooper()).post {
+            try {
+                suppressedBusinesses.toList().forEach { business ->
+                    if (runtimePresence(TESTER_PACKAGE, business) == RuntimePresence.ABSENT) {
+                        val old = evidence[business] ?: RuntimeEvidence()
+                        val changed = old.liveWidgetContains || old.runtimeActivated
+                        evidence[business] = old.copy(
+                            liveWidgetContains = false,
+                            runtimeActivated = false,
+                            lastEventAt = System.currentTimeMillis(),
+                            lastError = null,
+                        )
+                        if (changed) dispatchRuntimeEvent(business, "runtime_deactivated")
+                        cards.values.filter { it.business == business && it.pendingDelete }
+                            .forEach { finalizePendingDeletion(it.cardId, business) }
+                    }
+                }
+            } finally {
+                runtimeReconcileScheduled.set(false)
+            }
+        }
     }
 
     private fun registerServiceReceiver() {
@@ -520,7 +716,18 @@ class CustomRearCardHook : YukiBaseHooker() {
     }
 
     private fun activateCardInHost(command: CardCommand, persist: Boolean = true) {
-        val card = cards[command.cardId] ?: error("宿主 registry 中不存在该卡片")
+        val (card, activationEpoch) = synchronized(lifecycleLock) {
+            val current = cards[command.cardId] ?: error("宿主 registry 中不存在该卡片")
+            check(!current.pendingDelete) { "卡片正在删除，不能重新启用" }
+            if (persist) {
+                suppressedBusinesses.remove(command.business)
+            } else {
+                check(current.enabled && command.business !in suppressedBusinesses) {
+                    "卡片恢复已被较新的停用操作取消"
+                }
+            }
+            current to nextOperationEpoch(command.business)
+        }
         require(File(card.templatePath).isFile && File(card.templatePath).canRead()) { "宿主模板不可读" }
         require(command.rearParam.isNotBlank() && command.focusParam.isNotBlank()) { "卡片 payload 为空" }
         val runtimeId = syntheticRuntimeId(command.notificationId)
@@ -561,68 +768,275 @@ class CustomRearCardHook : YukiBaseHooker() {
             runnable.run()
         }
         val now = System.currentTimeMillis()
-        cards[card.cardId] = card.copy(
-            enabled = true,
-            rearParam = command.rearParam,
-            focusParam = command.focusParam,
-            updatedAt = now,
-        )
-        evidence[command.business] = (evidence[command.business] ?: RuntimeEvidence()).copy(
-            notificationSeen = false,
-            runtimeActivated = true,
-            lastCommandId = command.commandId,
-            lastEventAt = now,
-            lastError = null,
-        )
-        if (persist) writeRegistry()
+        val accepted = synchronized(lifecycleLock) {
+            val current = cards[card.cardId]
+            if (currentOperationEpoch(command.business) != activationEpoch ||
+                command.business in suppressedBusinesses || current?.pendingDelete != false
+            ) {
+                false
+            } else {
+                cards[card.cardId] = current.copy(
+                    enabled = true,
+                    rearParam = command.rearParam,
+                    focusParam = command.focusParam,
+                    updatedAt = now,
+                )
+                evidence[command.business] = (evidence[command.business] ?: RuntimeEvidence()).copy(
+                    notificationSeen = false,
+                    runtimeActivated = true,
+                    lastCommandId = command.commandId,
+                    lastEventAt = now,
+                    lastError = null,
+                )
+                if (persist) writeRegistry()
+                dispatchRuntimeEvent(command.business, "runtime_activated")
+                true
+            }
+        }
+        if (!accepted) {
+            scheduleSuppressedRuntimeEject(command.business, extras)
+            error("卡片启用已被较新的停用或删除操作取消")
+        }
         log("activate", command, true, "compositeKey=$compositeKey")
     }
 
     private fun deactivateCardInHost(command: CardCommand, persist: Boolean = true) {
-        val card = cards[command.cardId] ?: error("宿主 registry 中不存在该卡片")
-        removeBusinessAndAwait(command.business)
         val now = System.currentTimeMillis()
-        cards[card.cardId] = card.copy(enabled = false, updatedAt = now)
-        evidence[command.business] = (evidence[command.business] ?: RuntimeEvidence()).copy(
-            liveWidgetContains = false,
-            runtimeActivated = false,
-            lastCommandId = command.commandId,
-            lastEventAt = now,
-            lastError = null,
-        )
-        if (persist) writeRegistry()
+        synchronized(lifecycleLock) {
+            val card = cards[command.cardId] ?: error("宿主 registry 中不存在该卡片")
+            nextOperationEpoch(command.business)
+            suppressedBusinesses.add(command.business)
+            // Persist this before removal so delayed startup restoration cannot win.
+            cards[card.cardId] = card.copy(enabled = false, updatedAt = now)
+            if (persist) writeRegistry()
+            evidence[command.business] = (evidence[command.business] ?: RuntimeEvidence()).copy(
+                liveWidgetContains = false,
+                runtimeActivated = false,
+                lastCommandId = command.commandId,
+                lastEventAt = now,
+                lastError = null,
+            )
+            dispatchRuntimeEvent(command.business, "runtime_deactivated")
+        }
+        submitRuntimeRemoval(command.business)
         log("deactivate", command, true, "removed business=${command.business}")
     }
 
-    private fun removeBusinessAndAwait(business: String, timeoutMs: Long = 5_000L) {
+    /** Delivers host lifecycle callbacks to the manager app without using notifications. */
+    private fun dispatchRuntimeEvent(business: String, event: String) {
+        hostContext?.sendBroadcast(
+            Intent(FunCardHostContract.ACTION_CARD_RUNTIME_EVENT)
+                .setPackage(TESTER_PACKAGE)
+                .putExtra(FunCardHostContract.Keys.BUSINESS, business)
+                .putExtra(FunCardHostContract.Keys.RUNTIME_EVENT, event),
+        )
+    }
+
+    private fun submitRuntimeRemoval(business: String) {
         val target = manager ?: error("Smart Assistant manager 尚未就绪")
-        runOnMainThread {
-            if (managerContains(TESTER_PACKAGE, business)) {
-                invokeManagerRemoveBusiness(target, TESTER_PACKAGE, business)
+        val beforePresence = runtimePresence(TESTER_PACKAGE, business)
+        val before = managerWidgetCount(TESTER_PACKAGE, business)
+        fun dispatchRemovalPass(): Boolean = runOnMainThread {
+                var invoked = false
+                val current = managerWidgetIdentities(TESTER_PACKAGE, business)
+                current.forEach { identity ->
+                    if (identity.notificationId > 0) {
+                        runCatching {
+                            invokeManagerRemoveNotification(target, identity.notificationId, TESTER_PACKAGE)
+                        }.onSuccess {
+                            invoked = true
+                        }.onFailure {
+                            YLog.warn("[$TAG] notification remove failed id=${identity.notificationId}", it)
+                        }
+                    }
+                }
+                // Notification removal is canonical.  Composite cleanup only handles
+                // records which remain after that exact lifecycle call.
+                managerWidgetIdentities(TESTER_PACKAGE, business).forEach { identity ->
+                    runCatching {
+                        invokeManagerRemoveComposite(target, identity.compositeKey, TESTER_PACKAGE)
+                    }.onSuccess {
+                        invoked = true
+                    }.onFailure { YLog.warn("[$TAG] composite remove failed key=${identity.compositeKey}", it) }
+                }
+                runCatching {
+                    invokeManagerRemoveBusiness(target, TESTER_PACKAGE, business)
+                }.onSuccess {
+                    invoked = true
+                }.onFailure { YLog.warn("[$TAG] business remove failed business=$business", it) }
+                invoked
+            }
+        val accepted = dispatchRemovalPass()
+        check(beforePresence == RuntimePresence.ABSENT || accepted) {
+            "背屏 Runtime 移除接口不可用；已保留可恢复数据"
+        }
+        listOf(250L, 750L, 2_000L, 5_000L).forEach { delay ->
+            Handler(Looper.getMainLooper()).postDelayed({
+                if (business in suppressedBusinesses && managerContains(TESTER_PACKAGE, business)) {
+                    runCatching { dispatchRemovalPass() }
+                        .onFailure { YLog.warn("[$TAG] runtime removal retry failed business=$business", it) }
+                }
+            }, delay)
+        }
+        YLog.info("[$TAG] runtime removal submitted business=$business before=$before")
+    }
+
+    private fun schedulePendingDeletionCleanup(cardId: String, business: String) {
+        val handler = Handler(Looper.getMainLooper())
+        listOf(100L, 1_000L, 6_000L, 15_000L).forEach { delay ->
+            handler.postDelayed({
+                if (business !in suppressedBusinesses) return@postDelayed
+                when (runtimePresence(TESTER_PACKAGE, business)) {
+                    RuntimePresence.ABSENT -> finalizePendingDeletion(cardId, business)
+                    RuntimePresence.PRESENT, RuntimePresence.UNKNOWN -> if (delay >= 6_000L) {
+                        runCatching { submitRuntimeRemoval(business) }
+                            .onFailure { YLog.warn("[$TAG] pending delete retry failed business=$business", it) }
+                    }
+                }
+            }, delay)
+        }
+    }
+
+    private fun finalizePendingDeletion(cardId: String, business: String): Boolean = runOnMainThread {
+        if (runtimePresence(TESTER_PACKAGE, business) != RuntimePresence.ABSENT) return@runOnMainThread false
+        synchronized(lifecycleLock) {
+            if (business in installingBusinesses) return@synchronized false
+            val card = cards[cardId]
+            if (card != null && (card.business != business || !card.pendingDelete)) return@synchronized false
+            val target = card?.templatePath?.let(::File) ?: managedTemplateFile(cardId)
+            require(isManagedTemplate(target)) { "拒绝清理非托管模板" }
+            if (target.exists()) check(target.delete()) { "删除宿主模板失败" }
+            pendingBulkTemplates.remove(target.absolutePath)
+            pendingBulkBusinesses.remove(business)
+            if (card != null) cards.remove(cardId, card)
+            writeRegistry()
+            evidence.remove(business)
+            dispatchRuntimeEvent(business, "runtime_deleted")
+            YLog.info("[$TAG] pending delete finalized business=$business path=${target.absolutePath}")
+            true
+        }
+    }
+
+    private fun scheduleDeleteAllCleanup() {
+        val handler = Handler(Looper.getMainLooper())
+        listOf(250L, 1_500L, 6_500L, 16_000L).forEach { delay ->
+            handler.postDelayed({
+                val remaining = pendingBulkBusinesses.filter {
+                    runtimePresence(TESTER_PACKAGE, it) != RuntimePresence.ABSENT
+                }
+                if (delay >= 6_500L) remaining.forEach { business ->
+                    runCatching { submitRuntimeRemoval(business) }
+                }
+                cards.values.filter { it.pendingDelete }.toList().forEach { card ->
+                    finalizePendingDeletion(card.cardId, card.business)
+                }
+                runCatching { cleanupPendingBulk() }
+                    .onFailure { YLog.warn("[$TAG] bulk cleanup retry failed", it) }
+            }, delay)
+        }
+    }
+
+    private fun cleanupPendingBulk(): Boolean = runOnMainThread {
+        val targetBusinesses = pendingBulkTemplates.map { File(it).name }
+        val states = (pendingBulkBusinesses + targetBusinesses).associateWith { business ->
+            runtimePresence(TESTER_PACKAGE, business)
+        }
+        synchronized(lifecycleLock) {
+            var changed = false
+            pendingBulkBusinesses.toList().forEach { business ->
+                if (states[business] == RuntimePresence.ABSENT) {
+                    changed = pendingBulkBusinesses.remove(business) || changed
+                }
+            }
+            val retained = cards.values.filterNot { it.pendingDelete }
+                .map { File(it.templatePath).absolutePath }
+                .toSet()
+            pendingBulkTemplates.toList().forEach { path ->
+                val target = File(path)
+                val business = target.name
+                val resolved = when {
+                    !isManagedTemplate(target) -> true
+                    path in retained -> true
+                    business in installingBusinesses -> false
+                    !target.exists() -> true
+                    states[business] == RuntimePresence.ABSENT -> target.delete()
+                    else -> false
+                }
+                if (resolved) changed = pendingBulkTemplates.remove(path) || changed
+            }
+            if (changed) writeRegistry()
+            pendingBulkBusinesses.isEmpty() && pendingBulkTemplates.isEmpty()
+        }
+    }
+
+    private fun nextOperationEpoch(business: String): Long =
+        operationEpochs.computeIfAbsent(business) { AtomicLong() }.incrementAndGet()
+
+    private fun currentOperationEpoch(business: String): Long =
+        operationEpochs[business]?.get() ?: 0L
+
+    private fun notificationWidgetFile() = File(
+        "/data/system/theme_magic/users/${Process.myUid() / 100000}/subscreencenter/notification/notification_widget.json",
+    )
+
+    private fun managerWidgetCount(packageName: String, business: String): Int {
+        if (manager == null) return 0
+        return runOnMainThread {
+            val target = manager ?: return@runOnMainThread 0
+            val list = runCatching {
+                target.asResolver().firstField { name = resolveManagerListFieldName() }.get<Any>() as? Iterable<*>
+            }.getOrNull() ?: return@runOnMainThread 0
+            list.count { widget ->
+                val extras = managerWidgetBundle(widget) ?: return@count false
+                val pkg = widgetPackage(extras, business)
+                pkg == packageName && extras.getString("business") == business
             }
         }
-        val deadline = System.currentTimeMillis() + timeoutMs
-        while (managerContains(TESTER_PACKAGE, business) && System.currentTimeMillis() < deadline) {
-            Thread.sleep(100L)
+    }
+
+    private fun managerWidgetIdentities(packageName: String, business: String): List<RuntimeWidgetIdentity> {
+        if (manager == null) return emptyList()
+        return runOnMainThread {
+            val target = manager ?: return@runOnMainThread emptyList()
+            val list = runCatching {
+                target.asResolver().firstField { name = resolveManagerListFieldName() }.get<Any>() as? Iterable<*>
+            }.getOrNull() ?: return@runOnMainThread emptyList()
+            val fallbackId = cards.values.firstOrNull { it.business == business }
+                ?.notificationId?.let(::syntheticRuntimeId) ?: 0
+            list.mapNotNull { widget ->
+                val extras = managerWidgetBundle(widget) ?: return@mapNotNull null
+                val pkg = widgetPackage(extras, business)
+                if (pkg != packageName || extras.getString("business") != business) return@mapNotNull null
+                val notificationId = extras.getInt("notification_id", extras.getInt("widget_id", 0))
+                    .takeIf { it > 0 } ?: fallbackId
+                val compositeKey = extras.getString("composite_key").orEmpty()
+                    .ifBlank { "$packageName:$business:$notificationId" }
+                RuntimeWidgetIdentity(notificationId, compositeKey)
+            }.toList()
         }
-        check(!managerContains(TESTER_PACKAGE, business)) { "背屏 runtime 移除超时：$business" }
     }
 
     private fun syntheticRuntimeId(notificationId: Int): Int = 100_000_000 + notificationId
 
-    private fun runOnMainThread(timeoutMs: Long = 5_000L, action: () -> Unit) {
+    private fun <T> runOnMainThread(timeoutMs: Long = 5_000L, action: () -> T): T {
         if (Looper.myLooper() == Looper.getMainLooper()) {
-            action()
-            return
+            return action()
         }
+        val value = AtomicReference<T>()
         val error = AtomicReference<Throwable?>()
         val latch = CountDownLatch(1)
         Handler(Looper.getMainLooper()).post {
-            runCatching(action).onFailure(error::set)
-            latch.countDown()
+            try {
+                value.set(action())
+            } catch (failure: Throwable) {
+                error.set(failure)
+            } finally {
+                latch.countDown()
+            }
         }
         check(latch.await(timeoutMs, TimeUnit.MILLISECONDS)) { "等待宿主主线程执行超时" }
         error.get()?.let { throw it }
+        return value.get()
     }
 
     private fun invokeManagerRemoveBusiness(target: Any, packageName: String, business: String) {
@@ -631,6 +1045,42 @@ class CustomRearCardHook : YukiBaseHooker() {
             name = point.methodName
             parameterCount = 2
         }.invoke(packageName, business)
+    }
+
+    private fun invokeManagerRemoveNotification(target: Any, notificationId: Int, packageName: String) {
+        val point = resolveRemoveNotificationMethod()
+        target.asResolver().firstMethod {
+            name = point.methodName
+            parameterCount = 3
+        }.also { method ->
+            if (method.self.parameterTypes[1] == String::class.java) {
+                method.invoke(notificationId, packageName, 1)
+            } else {
+                method.invoke(notificationId, 1, packageName)
+            }
+        }
+    }
+
+    private fun invokeManagerRemoveComposite(target: Any, compositeKey: String, packageName: String): Boolean {
+        val point = resolveRemoveCompositeMethod()
+        return target.asResolver().firstMethod {
+            name = point.methodName
+            parameterCount = 3
+        }.invoke<Boolean>(1, compositeKey, packageName) == true
+    }
+
+    private fun scheduleSuppressedRuntimeEject(business: String, extras: Bundle) {
+        val target = manager ?: return
+        val notificationId = extras.getInt("notification_id", extras.getInt("widget_id", 0))
+        val compositeKey = extras.getString("composite_key").orEmpty()
+            .ifBlank { "$TESTER_PACKAGE:$business:$notificationId" }
+        Handler(Looper.getMainLooper()).post {
+            if (notificationId > 0) {
+                runCatching { invokeManagerRemoveNotification(target, notificationId, TESTER_PACKAGE) }
+            }
+            runCatching { invokeManagerRemoveComposite(target, compositeKey, TESTER_PACKAGE) }
+            runCatching { invokeManagerRemoveBusiness(target, TESTER_PACKAGE, business) }
+        }
     }
 
     private fun scheduleEnabledCardRestore() {
@@ -645,7 +1095,9 @@ class CustomRearCardHook : YukiBaseHooker() {
     private fun restoreEnabledCards(): Int {
         check(manager != null) { "Smart Assistant manager 尚未就绪" }
         var restored = 0
-        cards.values.filter { it.enabled }.forEach { card ->
+        cards.values.map { it.cardId }.forEach { cardId ->
+            val card = cards[cardId] ?: return@forEach
+            if (!card.enabled || card.pendingDelete || card.business in suppressedBusinesses) return@forEach
             if (managerContains(TESTER_PACKAGE, card.business)) return@forEach
             val command = CardCommand(
                 card.cardId,
@@ -714,30 +1166,61 @@ class CustomRearCardHook : YukiBaseHooker() {
         cards.values.firstOrNull { it.business == business }?.templatePath
 
     private fun loadRegistry() {
-        val file = registryFile()
-        if (!file.isFile) return
-        runCatching {
-            val array = JSONObject(file.readText()).optJSONArray("cards") ?: JSONArray()
-            for (index in 0 until array.length()) {
-                val item = array.optJSONObject(index) ?: continue
-                val cardId = item.optString("cardId")
-                val business = item.optString("business")
-                val path = item.optString("templatePath")
-                val target = File(path)
-                if (!cardId.matches(SAFE_CARD_ID) || business != "reareye_custom_$cardId" ||
-                    !isManagedTemplate(target) || !target.isFile
-                ) continue
-                cards[cardId] = HostCard(
-                    cardId, business, item.optString("displayName", business), path,
-                    item.optString("sha256"), item.optInt("notificationId"), item.optLong("updatedAt"),
-                    item.optBoolean("enabled"), item.optString("rearParam", "{}"),
-                    item.optString("focusParam", "{}"),
-                )
-            }
-        }.onFailure { YLog.error("[$TAG] registry load failed", it) }
+        synchronized(registryLock) {
+            val file = registryFile()
+            if (!file.isFile) return
+            runCatching {
+                val root = JSONObject(file.readText())
+                val array = root.optJSONArray("cards") ?: JSONArray()
+                for (index in 0 until array.length()) {
+                    val item = array.optJSONObject(index) ?: continue
+                    val cardId = item.optString("cardId")
+                    val business = item.optString("business")
+                    val path = item.optString("templatePath")
+                    val target = File(path)
+                    if (!cardId.matches(SAFE_CARD_ID) || business != "reareye_custom_$cardId" ||
+                        !isManagedTemplate(target) || !target.isFile
+                    ) continue
+                    val enabled = item.optBoolean("enabled")
+                    val pendingDelete = item.optBoolean("pendingDelete")
+                    cards[cardId] = HostCard(
+                        cardId = cardId,
+                        business = business,
+                        displayName = item.optString("displayName", business),
+                        templatePath = path,
+                        sha256 = item.optString("sha256"),
+                        notificationId = item.optInt("notificationId"),
+                        updatedAt = item.optLong("updatedAt"),
+                        enabled = enabled,
+                        pendingDelete = pendingDelete,
+                        rearParam = item.optString("rearParam", "{}"),
+                        focusParam = item.optString("focusParam", "{}"),
+                    )
+                    if (!enabled || pendingDelete) suppressedBusinesses.add(business)
+                }
+                val pendingBusinesses = root.optJSONArray("pendingBulkBusinesses") ?: JSONArray()
+                for (index in 0 until pendingBusinesses.length()) {
+                    val business = pendingBusinesses.optString(index)
+                    val cardId = business.removePrefix("reareye_custom_")
+                    if (business == "reareye_custom_$cardId" && cardId.matches(SAFE_CARD_ID)) {
+                        pendingBulkBusinesses.add(business)
+                        suppressedBusinesses.add(business)
+                    }
+                }
+                val pendingTemplates = root.optJSONArray("pendingBulkTemplates") ?: JSONArray()
+                for (index in 0 until pendingTemplates.length()) {
+                    val target = File(pendingTemplates.optString(index))
+                    if (isManagedTemplate(target)) {
+                        pendingBulkTemplates.add(target.absolutePath)
+                        pendingBulkBusinesses.add(target.name)
+                        suppressedBusinesses.add(target.name)
+                    }
+                }
+            }.onFailure { YLog.error("[$TAG] registry load failed", it) }
+        }
     }
 
-    private fun writeRegistry() {
+    private fun writeRegistry() = synchronized(registryLock) {
         val dir = registryDir()
         if (!dir.exists()) check(dir.mkdirs()) { "无法创建宿主 registry 目录" }
         val array = JSONArray()
@@ -746,13 +1229,33 @@ class CustomRearCardHook : YukiBaseHooker() {
                 .put("displayName", card.displayName).put("templatePath", card.templatePath)
                 .put("sha256", card.sha256).put("notificationId", card.notificationId)
                 .put("updatedAt", card.updatedAt).put("enabled", card.enabled)
+                .put("pendingDelete", card.pendingDelete)
                 .put("rearParam", card.rearParam).put("focusParam", card.focusParam))
         }
         val target = registryFile()
-        val temp = File(dir, ".registry.${Process.myPid()}.tmp")
-        temp.writeText(JSONObject().put("schemaVersion", 3).put("cards", array).toString())
-        if (target.exists()) check(target.delete()) { "无法替换宿主 registry" }
-        check(temp.renameTo(target)) { "宿主 registry 原子替换失败" }
+        val atomic = AtomicFile(target)
+        val output = atomic.startWrite()
+        try {
+            val pendingBusinesses = JSONArray().apply {
+                pendingBulkBusinesses.sorted().forEach(::put)
+            }
+            val pendingTemplates = JSONArray().apply {
+                pendingBulkTemplates.sorted().forEach(::put)
+            }
+            output.write(
+                JSONObject()
+                    .put("schemaVersion", 5)
+                    .put("cards", array)
+                    .put("pendingBulkBusinesses", pendingBusinesses)
+                    .put("pendingBulkTemplates", pendingTemplates)
+                    .toString()
+                    .toByteArray(),
+            )
+            atomic.finishWrite(output)
+        } catch (error: Throwable) {
+            atomic.failWrite(output)
+            throw error
+        }
         target.setReadable(true, true)
     }
 
@@ -770,7 +1273,8 @@ class CustomRearCardHook : YukiBaseHooker() {
     }
 
     private fun parseBusiness(extras: Bundle): String? {
-        extras.getString("business")?.trim()?.takeIf { businessPath(it) != null }?.let { return it }
+        val known = cards.values.map { it.business }.toSet() + suppressedBusinesses
+        extras.getString("business")?.trim()?.takeIf { it in known }?.let { return it }
         listOf("miui.rear.param", "miui.focus.param").forEach { key ->
             val root = runCatching { JSONObject(extras.getString(key).orEmpty()) }.getOrNull() ?: return@forEach
             val candidates = listOf(
@@ -778,13 +1282,13 @@ class CustomRearCardHook : YukiBaseHooker() {
                 root.optJSONObject("rear_param_v1")?.optString("business"),
                 root.optJSONObject("param_v2")?.optString("business"),
             )
-            candidates.filterNotNull().firstOrNull { businessPath(it) != null }?.let { return it }
+            candidates.filterNotNull().firstOrNull { it in known }?.let { return it }
         }
         return null
     }
 
     private fun extractKnownBusiness(value: Any?): String? {
-        val known = cards.values.map { it.business }.toSet()
+        val known = cards.values.map { it.business }.toSet() + suppressedBusinesses
         if (known.isEmpty() || value == null) return null
         if (value is String) return known.firstOrNull { value.contains(it) }
         if (value is Bundle) return parseBusiness(value)
@@ -802,37 +1306,68 @@ class CustomRearCardHook : YukiBaseHooker() {
     }
 
     private fun managerBusinesses(): Set<String> {
-        val target = manager ?: return emptySet()
-        val list = runCatching {
-            target.asResolver().firstField { name = resolveManagerListFieldName() }.get<Any>() as? Iterable<*>
-        }.getOrNull() ?: return emptySet()
-        return list.mapNotNull { widget -> managerWidgetBundle(widget)?.getString("business") }.toSet()
+        if (manager == null) return emptySet()
+        return runOnMainThread {
+            val target = manager ?: return@runOnMainThread emptySet()
+            val list = runCatching {
+                target.asResolver().firstField { name = resolveManagerListFieldName() }.get<Any>() as? Iterable<*>
+            }.getOrNull() ?: return@runOnMainThread emptySet()
+            list.mapNotNull { widget -> managerWidgetBundle(widget)?.getString("business") }.toSet()
+        }
     }
 
     private fun managerOuterViewBusinesses(): Set<String> {
-        val target = manager ?: return emptySet()
-        val list = runCatching {
-            target.asResolver().firstField { name = resolveManagerListFieldName() }.get<Any>() as? Iterable<*>
-        }.getOrNull() ?: return emptySet()
-        return list.mapNotNull { widget ->
-            val extras = managerWidgetBundle(widget) ?: return@mapNotNull null
-            val pkg = extras.getString("package_name") ?: extras.getString("creator_package")
-            val business = extras.getString("business")
-            business?.takeIf { pkg == TESTER_PACKAGE && it.startsWith("reareye_custom_") }
-        }.toSet()
+        if (manager == null) return emptySet()
+        return runOnMainThread {
+            val target = manager ?: return@runOnMainThread emptySet()
+            val list = runCatching {
+                target.asResolver().firstField { name = resolveManagerListFieldName() }.get<Any>() as? Iterable<*>
+            }.getOrNull() ?: return@runOnMainThread emptySet()
+            list.mapNotNull { widget ->
+                val extras = managerWidgetBundle(widget) ?: return@mapNotNull null
+                val business = extras.getString("business") ?: return@mapNotNull null
+                val pkg = widgetPackage(extras, business)
+                business.takeIf { pkg == TESTER_PACKAGE && it.startsWith("reareye_custom_") }
+            }.toSet()
+        }
     }
 
     private fun managerContains(packageName: String, business: String): Boolean {
-        val target = manager ?: return false
-        val list = runCatching {
-            target.asResolver().firstField { name = resolveManagerListFieldName() }.get<Any>() as? Iterable<*>
-        }.getOrNull() ?: return false
-        return list.any { widget ->
-            val extras = managerWidgetBundle(widget) ?: return@any false
-            val pkg = extras.getString("package_name") ?: extras.getString("creator_package")
-            extras.getString("business") == business && pkg == packageName
+        return runtimePresence(packageName, business) == RuntimePresence.PRESENT
+    }
+
+    private fun runtimePresence(packageName: String, business: String): RuntimePresence {
+        if (manager == null) return RuntimePresence.UNKNOWN
+        return runOnMainThread {
+            val target = manager ?: return@runOnMainThread RuntimePresence.UNKNOWN
+            runCatching {
+                val list = target.asResolver()
+                    .firstField { name = resolveManagerListFieldName() }
+                    .get<Any>() as? Iterable<*> ?: error("manager list unavailable")
+                var unreadableRecord = false
+                val present = list.any { widget ->
+                        val extras = managerWidgetBundle(widget) ?: run {
+                            unreadableRecord = true
+                            return@any false
+                        }
+                        val pkg = widgetPackage(extras, business)
+                        extras.getString("business") == business && pkg == packageName
+                    }
+                when {
+                    present -> RuntimePresence.PRESENT
+                    unreadableRecord -> RuntimePresence.UNKNOWN
+                    else -> RuntimePresence.ABSENT
+                }
+            }.getOrElse { RuntimePresence.UNKNOWN }
         }
     }
+
+    private fun widgetPackage(extras: Bundle, business: String): String? =
+        extras.getString("package_name")
+            ?: extras.getString("creator_package")
+            ?: TESTER_PACKAGE.takeIf {
+                business in suppressedBusinesses || cards.values.any { card -> card.business == business }
+            }
 
     private fun managerWidgetBundle(widget: Any?): Bundle? {
         widget ?: return null
@@ -842,9 +1377,7 @@ class CustomRearCardHook : YukiBaseHooker() {
     }
 
     private fun persistentBusinesses(): Set<String> {
-        val file = File(
-            "/data/system/theme_magic/users/${Process.myUid() / 100000}/subscreencenter/notification/notification_widget.json"
-        )
+        val file = notificationWidgetFile()
         return runCatching {
             val raw = file.readText().removePrefix("\uFEFF")
             val array = JSONArray(raw)
@@ -992,6 +1525,26 @@ class CustomRearCardHook : YukiBaseHooker() {
             paramTypes(String::class.java, String::class.java)
             returnType = "void"
             usingStrings("Removing widgets for %s:%s")
+        } }.singleOrNull()
+    }
+
+    private fun resolveRemoveNotificationMethod() = resolveCachedMethod("REMOVE_NOTIFICATION") {
+        val managerClass = resolveManagerInitMethod().className
+        findMethod { matcher {
+            declaredClass = managerClass
+            paramCount(3)
+            returnType = "void"
+            usingStrings("Widget not found for multi-business app: %s, ID: %d")
+        } }.singleOrNull()
+    }
+
+    private fun resolveRemoveCompositeMethod() = resolveCachedMethod("REMOVE_COMPOSITE") {
+        val managerClass = resolveManagerInitMethod().className
+        findMethod { matcher {
+            declaredClass = managerClass
+            paramTypes("int", "java.lang.String", "java.lang.String")
+            returnType = "boolean"
+            usingStrings("Found widget for compositeKey: %s, removing")
         } }.singleOrNull()
     }
 

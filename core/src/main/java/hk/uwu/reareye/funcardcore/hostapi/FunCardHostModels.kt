@@ -23,6 +23,7 @@ data class HostActionResult(
     val errorCode: String? = null,
     val templatePath: String? = null,
     val diagnostics: HostCardDiagnostics? = null,
+    val cleanupPending: Boolean = false,
 ) {
     companion object {
         fun fromBundle(bundle: Bundle?): HostActionResult {
@@ -34,6 +35,7 @@ data class HostActionResult(
                 errorCode = bundle.getString(FunCardHostContract.Keys.ERROR_CODE),
                 templatePath = bundle.getString(FunCardHostContract.Keys.TEMPLATE_PATH),
                 diagnostics = HostCardDiagnostics.fromBundle(bundle),
+                cleanupPending = bundle.getBoolean(FunCardHostContract.Keys.CLEANUP_PENDING),
             )
         }
     }

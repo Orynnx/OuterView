@@ -4,6 +4,7 @@ import android.content.Context
 import android.net.Uri
 import android.os.Bundle
 import android.os.ParcelFileDescriptor
+import android.util.AtomicFile
 import android.util.Log
 import com.google.gson.Gson
 import hk.uwu.reareye.funcardcore.hostapi.FunCardHostClient
@@ -26,6 +27,7 @@ object FunCardRepository {
     private const val LegacyRegistryName = "fun_cards_registry.json"
     private const val CardsDirName = "custom_cards_v2"
     private val gson = Gson()
+    private val registryLock = Any()
 
     suspend fun loadCards(context: Context): List<CustomCardRecord> = withContext(Dispatchers.IO) {
         processPendingCleanup(context)
@@ -246,12 +248,14 @@ object FunCardRepository {
             }
             val diagnostics = awaitDiagnostics(client, record, visible = true)
             client.disconnect()
+            // Runtime insertion is the host's enable callback.  The notification widget
+            // observer may arrive much later (or never show a popup), so it must not
+            // block the card from becoming operable.
             val verified = diagnostics.managerListContains &&
-                diagnostics.templateReadable &&
-                (diagnostics.loadSucceeded || diagnostics.liveWidgetContains)
+                diagnostics.runtimeActivated && diagnostics.templateReadable
             val nextState = if (verified) RearCardState.INSTALLED_ENABLED else RearCardState.ERROR
-            val message = if (verified) "卡片已由原生 MAML loader 加载" else
-                diagnostics.lastError ?: "5 秒内未观察到完整加载证据"
+            val message = if (verified) "卡片已启用，正在由背屏加载" else
+                diagnostics.lastError ?: "5 秒内未收到宿主启用回调"
             val next = record.copy(
                 state = nextState.value,
                 desiredEnabled = verified,
@@ -290,11 +294,12 @@ object FunCardRepository {
                     desiredEnabled = false,
                 )
             }
-            val diagnostics = awaitDiagnostics(client, record, visible = false)
             client.disconnect()
-            val verified = !diagnostics.managerListContains && !diagnostics.liveWidgetContains
-            val nextState = if (verified) RearCardState.INSTALLED_DISABLED else RearCardState.ERROR
-            val message = if (verified) "卡片已从背屏隐藏" else "5 秒内未确认卡片移除"
+            // Host removal is asynchronous. A successful native dispatch is the command
+            // acknowledgement; final disappearance is reconciled by runtime callbacks.
+            val verified = true
+            val nextState = RearCardState.INSTALLED_DISABLED
+            val message = "隐藏请求已提交到背屏"
             val next = record.copy(
                 state = nextState.value,
                 desiredEnabled = false,
@@ -314,10 +319,15 @@ object FunCardRepository {
             }
             val commandId = commandId("uninstall", record.cardId)
             val result = withHost(context) { it.uninstallCard(request(record, commandId)) }
-            val nextState = if (result.success) RearCardState.NOT_INSTALLED else RearCardState.ERROR
+            val nextState = when {
+                !result.success -> RearCardState.ERROR
+                result.cleanupPending -> RearCardState.INSTALLED_DISABLED
+                else -> RearCardState.NOT_INSTALLED
+            }
             val next = record.copy(
                 state = nextState.value,
-                hostTemplatePath = if (result.success) null else record.hostTemplatePath,
+                hostTemplatePath = if (result.success && !result.cleanupPending) null else record.hostTemplatePath,
+                cleanupPending = result.cleanupPending,
                 lastCommandId = commandId,
                 lastMessage = result.message,
                 updatedAt = System.currentTimeMillis(),
@@ -341,14 +351,25 @@ object FunCardRepository {
                 val uninstall = uninstallCard(context, current)
                 current = uninstall.record ?: current
                 if (!uninstall.success) {
-                    current.localFile.delete()
-                    cardDir(context, current.cardId).deleteRecursively()
                     val tombstone = RearCardWorkflow.cleanupTombstone(
                         current,
-                        "本地记录已删除，等待 Hook 清理宿主残留",
+                        "删除请求已保留，等待 Hook 恢复后清理宿主 Runtime",
                     )
                     update(context, tombstone)
                     return@withContext CardOperationResult(true, tombstone.lastMessage.orEmpty(), RearCardState.ERROR, tombstone)
+                }
+                if (current.cleanupPending) {
+                    val tombstone = RearCardWorkflow.cleanupTombstone(
+                        current,
+                        "卡片已从列表移除，宿主正在安全清理 Runtime",
+                    )
+                    update(context, tombstone)
+                    return@withContext CardOperationResult(
+                        true,
+                        tombstone.lastMessage.orEmpty(),
+                        RearCardState.INSTALLED_DISABLED,
+                        tombstone,
+                    )
                 }
             }
             current.localFile.delete()
@@ -371,25 +392,27 @@ object FunCardRepository {
         }
         client.disconnect()
 
-        records.forEach { record ->
-            FunCardNotificationController.cancel(context, record.notificationId)
-            record.localFile.delete()
-            cardDir(context, record.cardId).deleteRecursively()
-        }
-        if (result.success) {
+        records.forEach { record -> FunCardNotificationController.cancel(context, record.notificationId) }
+        if (result.success && !result.cleanupPending) {
+            records.forEach { record ->
+                record.localFile.delete()
+                cardDir(context, record.cardId).deleteRecursively()
+            }
             saveAll(context, emptyList())
             CardOperationResult(true, result.message, RearCardState.NOT_INSTALLED)
         } else {
             val tombstones = records.map { record ->
                 RearCardWorkflow.cleanupTombstone(
                     record,
-                    "本地记录已删除，等待 Hook 批量清理宿主残留",
+                    if (result.success) "卡片已从列表移除，宿主正在安全清理 Runtime"
+                    else "删除请求已保留，等待 Hook 恢复后批量清理 Runtime",
                 )
             }
             saveAll(context, tombstones)
             CardOperationResult(
                 true,
-                "本地卡片已移除；宿主连接恢复后继续清理",
+                if (result.success) "卡片已从列表移除，宿主正在安全清理"
+                else "卡片删除请求已保留；宿主连接恢复后继续清理",
                 RearCardState.ERROR,
             )
         }
@@ -479,15 +502,17 @@ object FunCardRepository {
             val diagnostics = client.diagnostics(record.cardId, record.business, record.notificationId)
             val state = when {
                 !diagnostics.hostRegistryContains -> RearCardState.NOT_INSTALLED
+                !record.desiredEnabled && diagnostics.managerListContains -> RearCardState.ERROR
                 diagnostics.managerListContains &&
-                    (diagnostics.loadSucceeded || diagnostics.liveWidgetContains) -> RearCardState.INSTALLED_ENABLED
+                    diagnostics.runtimeActivated && diagnostics.templateReadable -> RearCardState.INSTALLED_ENABLED
                 !diagnostics.managerListContains -> RearCardState.INSTALLED_DISABLED
                 else -> RearCardState.ERROR
             }
             record.copy(
                 state = state.value,
-                desiredEnabled = state == RearCardState.INSTALLED_ENABLED ||
-                    (state == RearCardState.ERROR && record.desiredEnabled),
+                // Host observations describe actual state; they must never overwrite
+                // the user's desired on/off state during a transient removal race.
+                desiredEnabled = record.desiredEnabled,
                 hostTemplatePath = diagnostics.actualTemplatePath ?: record.hostTemplatePath,
                 lastMessage = if (state == RearCardState.ERROR) {
                     diagnostics.lastError ?: "宿主 runtime 状态不一致"
@@ -510,7 +535,7 @@ object FunCardRepository {
         repeat(25) {
             latest = client.diagnostics(record.cardId, record.business, record.notificationId)
             val reached = if (visible) {
-                latest.managerListContains && (latest.loadSucceeded || latest.liveWidgetContains)
+                latest.managerListContains && latest.runtimeActivated && latest.templateReadable
             } else {
                 !latest.managerListContains && !latest.liveWidgetContains
             }
@@ -527,7 +552,9 @@ object FunCardRepository {
             val result = withHost(context) {
                 it.uninstallCard(request(record, commandId("cleanup", record.cardId)))
             }
-            if (result.success) {
+            if (result.success && !result.cleanupPending) {
+                record.localFile.delete()
+                cardDir(context, record.cardId).deleteRecursively()
                 saveAll(context, loadAll(context).filterNot { it.cardId == record.cardId })
             }
         }
@@ -581,16 +608,16 @@ object FunCardRepository {
         }
     }
 
-    private fun loadAll(context: Context): List<CustomCardRecord> {
+    private fun loadAll(context: Context): List<CustomCardRecord> = synchronized(registryLock) {
         val file = registryFile(context)
-        return if (file.isFile) FunCardRegistryCodec.decode(file.readText()) else emptyList()
+        if (file.isFile) FunCardRegistryCodec.decode(file.readText()) else emptyList()
     }
 
-    private fun update(context: Context, record: CustomCardRecord) {
+    private fun update(context: Context, record: CustomCardRecord) = synchronized(registryLock) {
         saveAll(context, loadAll(context).filterNot { it.cardId == record.cardId } + record)
     }
 
-    private fun saveAll(context: Context, records: List<CustomCardRecord>) {
+    private fun saveAll(context: Context, records: List<CustomCardRecord>) = synchronized(registryLock) {
         writeAtomically(registryFile(context), FunCardRegistryCodec.encode(records).toByteArray())
     }
 
@@ -603,11 +630,14 @@ object FunCardRepository {
 
     private fun writeAtomically(file: File, bytes: ByteArray) {
         file.parentFile?.mkdirs()
-        val temp = File(file.parentFile, "${file.name}.tmp")
-        temp.writeBytes(bytes)
-        if (file.exists()) file.delete()
-        check(temp.renameTo(file) || runCatching { temp.copyTo(file, overwrite = true); temp.delete(); true }.getOrDefault(false)) {
-            "写入 ${file.name} 失败"
+        val atomic = AtomicFile(file)
+        val output = atomic.startWrite()
+        try {
+            output.write(bytes)
+            atomic.finishWrite(output)
+        } catch (error: Throwable) {
+            atomic.failWrite(output)
+            throw error
         }
     }
 
