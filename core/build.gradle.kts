@@ -8,7 +8,7 @@ plugins {
 
 android {
     namespace = "hk.uwu.reareye.funcardcore"
-    compileSdk = 37
+    compileSdk = 36
 
     defaultConfig {
         minSdk = 36

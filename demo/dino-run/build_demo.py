@@ -24,6 +24,9 @@ def build(output: Path) -> None:
         for path in card_files():
             name = path.relative_to(CARD).as_posix()
             info = zipfile.ZipInfo(name, date_time=(2026, 1, 1, 0, 0, 0))
+            # ZipInfo defaults create_system to the host OS, which produced
+            # different committed archives on Windows and Linux CI runners.
+            info.create_system = 0
             info.compress_type = zipfile.ZIP_DEFLATED
             info.external_attr = 0o100644 << 16
             archive.writestr(info, path.read_bytes(), compresslevel=9)

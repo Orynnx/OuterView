@@ -6,7 +6,7 @@
 
 OuterView 是面向小米 17 Pro / 17 Pro Max 背屏的自定义 Smart Assistant 卡片加载器。它同时是一个独立 LSPosed 模块和一个 Compose 管理器，不依赖 REAREye。
 
-当前版本：`2.2.0`，Host API：`v3`。
+当前版本：`2.3.1`，Assistant Host API：`v5`，Wallpaper Host API：`v2`。
 
 ## AI创作声明
 
@@ -32,7 +32,7 @@ OuterView 是面向小米 17 Pro / 17 Pro Max 背屏的自定义 Smart Assistant
 1. 安装 Release APK。
 2. 在 LSPosed 中启用 OuterView，并将作用域设为“小米背屏中心” `com.xiaomi.subscreencenter`。
 3. 强制停止背屏中心或重启设备，使 Hook 生效。
-4. 打开 OuterView，顶部应显示“Host API v3 已连接”。
+4. 打开 OuterView，顶部应显示 Assistant 与 Wallpaper Host 的连接状态。
 5. 点击右下角 `+`，选择卡片 ZIP。校验通过后会自动安装，但不会自动显示。
 6. 打开卡片开关即可显示；关闭开关只隐藏，不删除模板。
 7. 在更多菜单中可替换模板、编辑 payload、查看诊断或永久删除。
@@ -50,7 +50,7 @@ docs/                架构、二次开发与卡片适配文档
 
 ## 构建
 
-要求 JDK 17、Android SDK 37：
+要求 JDK 17、Android SDK 36：
 
 Windows PowerShell：
 

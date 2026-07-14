@@ -9,14 +9,14 @@ plugins {
 
 android {
     namespace = "org.orynnx.outerview"
-    compileSdk = 37
+    compileSdk = 36
 
     defaultConfig {
         applicationId = "org.orynnx.outerview"
         minSdk = 36
-        targetSdk = 37
-        versionCode = 7
-        versionName = "2.3.0"
+        targetSdk = 36
+        versionCode = 8
+        versionName = "2.3.1"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
