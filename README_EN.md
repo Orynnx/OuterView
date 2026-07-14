@@ -9,7 +9,7 @@ It validates and installs `Widget version="2"` ZIP packages, then activates card
 1. Install the APK and enable OuterView in LSPosed.
 2. Scope the module to `com.xiaomi.subscreencenter`.
 3. restart the host process or reboot the device.
-4. Open OuterView and verify that Host API v3 is connected.
+4. Open OuterView and verify that the Assistant and Wallpaper hosts are connected.
 5. Import a card ZIP. Installation is automatic; visibility remains off by default.
 6. Use the switch to show or hide the card, and the overflow menu to replace, diagnose, or delete it.
 
