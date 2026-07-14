@@ -1,13 +1,15 @@
 package hk.uwu.reareye.funcardcore.hostapi
 
 object FunCardHostContract {
-    const val API_VERSION = 4
+    const val API_VERSION = 5
     const val PROVIDER_PACKAGE = "org.orynnx.outerview"
     const val HOST_PACKAGE = "com.xiaomi.subscreencenter"
     const val ACTION_REQUEST_SERVICE =
         "org.orynnx.outerview.action.REQUEST_FUN_CARD_HOST_SERVICE"
     const val EXTRA_BUNDLE = "hostApiBundle"
     const val EXTRA_CALLBACK = "callback"
+    const val ACTION_CARD_RUNTIME_EVENT =
+        "org.orynnx.outerview.action.CARD_RUNTIME_EVENT"
 
     object Keys {
         const val SUCCESS = "success"
@@ -45,5 +47,7 @@ object FunCardHostContract {
         const val ACTIVE = "active"
         const val SYSTEM_TEMPLATE = "systemTemplate"
         const val SYSTEM_PATH_NAME = "systemPathName"
+        const val RUNTIME_EVENT = "runtimeEvent"
+        const val CLEANUP_PENDING = "cleanupPending"
     }
 }

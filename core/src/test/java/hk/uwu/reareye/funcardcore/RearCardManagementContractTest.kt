@@ -12,9 +12,10 @@ class RearCardManagementContractTest {
     fun exposesOnlyHighLevelLifecycleEndpoints() {
         val methods = RearCardManagementEndpoints::class.java.methods.map { it.name }.toSet()
 
-        assertEquals(4, RearCardManager.API_VERSION)
-        assertEquals(4, FunCardHostContract.API_VERSION)
+        assertEquals(5, RearCardManager.API_VERSION)
+        assertEquals(5, FunCardHostContract.API_VERSION)
         assertEquals("org.orynnx.outerview", FunCardHostContract.PROVIDER_PACKAGE)
+        assertEquals("cleanupPending", FunCardHostContract.Keys.CLEANUP_PENDING)
         assertEquals(
             "org.orynnx.outerview.action.REQUEST_FUN_CARD_HOST_SERVICE",
             FunCardHostContract.ACTION_REQUEST_SERVICE,
