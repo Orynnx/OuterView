@@ -13,6 +13,7 @@ core-ktx = "1.18.0"
 coroutines = "1.9.0"
 gson = "2.14.0"
 junit = "4.13.2"
+json-test = "20260522"
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }
@@ -40,3 +41,4 @@ androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = 
 kotlinx-coroutines-core = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-core", version.ref = "coroutines" }
 gson = { group = "com.google.code.gson", name = "gson", version.ref = "gson" }
 junit = { group = "junit", name = "junit", version.ref = "junit" }
+json-test = { group = "org.json", name = "json", version.ref = "json-test" }

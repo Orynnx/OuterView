@@ -18,3 +18,4 @@ dependencyResolutionManagement {
 rootProject.name = "OuterView"
 include(":app")
 include(":core")
+include(":codex-quota-companion")
