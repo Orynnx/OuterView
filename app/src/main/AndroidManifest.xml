@@ -15,18 +15,10 @@
         android:roundIcon="@mipmap/ic_launcher"
         android:supportsRtl="true"
         android:theme="@style/Theme.FunCardTester">
-        <meta-data
-            android:name="xposedsharedprefs"
-            android:value="true" />
-        <meta-data
-            android:name="xposedscope"
-            android:resource="@array/module_scope" />
-        <meta-data
-            android:name="xposeddescription"
-            android:value="@string/xposed_desc" />
-        <meta-data
-            android:name="xposedminversion"
-            android:value="93" />
+        <meta-data android:name="xposeddescription" android:value="@string/xposed_desc" />
+        <meta-data android:name="xposedminversion" android:value="93" />
+        <meta-data android:name="xposedscope" android:resource="@array/module_scope" />
+        <meta-data android:name="xposedsharedprefs" android:value="true" />
 
         <activity
             android:name=".MainActivity"

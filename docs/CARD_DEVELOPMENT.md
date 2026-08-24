@@ -5,7 +5,7 @@
 ```text
 my-card.zip
 ├── manifest.xml
-├── reareye-card.json       可选
+├── outerview-card.json     可选
 └── assets/
     └── image.png
 ```
@@ -26,7 +26,7 @@ my-card.zip
 
 ## 元数据
 
-可选的 `reareye-card.json` 只影响导入展示和默认 payload，不能覆盖最终 business 或宿主路径：
+可选的 `outerview-card.json` 只影响导入展示和默认 payload，不能覆盖最终 business 或宿主路径。导入器仍可读取旧文件名用于兼容 2.x 卡片：
 
 ```json
 {
@@ -38,12 +38,12 @@ my-card.zip
 }
 ```
 
-OuterView 首次导入时生成随机 128 位 `cardId`，并固定使用 `reareye_custom_<cardId>` 作为 business。替换模板不会改变身份。
+OuterView 首次导入时生成随机 128 位 `cardId`，并固定使用 `outerview_custom_<cardId>` 作为 business。替换模板不会改变身份。
 
 ## 尺寸与交互
 
 - 使用 `#view_width`、`#view_height` 适配宿主实际区域。
-- 固定设计稿可以通过统一 `scale` 和居中 offset 映射，Dino Run 使用 480 x 304 逻辑画布。
+- 固定设计稿可以通过统一 `scale` 和居中 offset 映射；Hello Card 使用 480 x 304 逻辑画布。
 - 触摸区域应使用宿主支持的根层 `touchable` Group/Rectangle，并在真机验证摄像头遮挡区。
 - 动画应有稳定尺寸，不要依赖内容变化改变根布局。
 - 避免高帧率常驻动画；静止状态暂停 Animation，减少背屏功耗。
@@ -68,10 +68,10 @@ OuterView 首次导入时生成随机 128 位 `cardId`，并固定使用 `rearey
 
 ## 打包与测试
 
-Dino Run 提供仅使用 Python 标准库的打包脚本：
+Hello Card 提供仅使用 Python 标准库的确定性打包脚本：
 
 ```bash
-python demo/dino-run/build_demo.py
+python demo/hello-card/build_card.py
 ```
 
 开发卡片建议按以下顺序测试：
@@ -82,4 +82,4 @@ python demo/dino-run/build_demo.py
 4. 反复执行显示、隐藏和宿主重启。
 5. 删除后确认 manager list 与模板路径均不存在。
 
-完整实例见 [Dino Run](../demo/dino-run/README.md)。
+完整实例见 [Hello Card](../demo/hello-card/README.md)。

@@ -4,100 +4,84 @@
 
 # OuterView
 
-OuterView 是面向小米 17 Pro / 17 Pro Max 背屏的自定义 Smart Assistant 卡片加载器。它同时是一个独立 LSPosed 模块和一个 Compose 管理器，不依赖 REAREye。
+OuterView 是面向小米 17 Pro / 17 Pro Max 背屏的自定义 Smart Assistant 卡片与壁纸管理器，
+同时提供独立 LSPosed 模块和 Compose 管理界面。
 
-当前版本：`2.3.2`，Assistant Host API：`v5`，Wallpaper Host API：`v2`。
+当前版本：`3.0.0`；Assistant Host API：`v5`；Wallpaper Host API：`v2`。
 
-## AI创作声明
+## 3.0 的独立性
 
-此项目中由GPT5.6-Sol自主完成编码和测试。不对软件的安全性、可用性和文档的正确性做任何形式的保证。如果担心 OuterView 您的设备，请不要安装 OuterView。请知悉 Orynnx 不承担由此带来的一切责任。
+- 不链接 DexKit、MMKV 或任何 GPL/LGPL/AGPL 运行时依赖。
+- 使用项目自有的 DEX 查询器和 BSD-3-Clause 的 Google `smali-dexlib2` 定位 HyperOS 宿主入口。
+- `core` 命名空间为 `org.orynnx.outerview.core`，新卡片使用 `outerview_custom_` 标识。
+- 旧 `reareye_custom_` 标识只用于迁移本应用先前创建的数据，不会扫描或接管其他模块资源。
+- 仓库附带的 Hello Card 只含项目原创 XML、元数据和打包脚本，不含外部图片、音频或字体。
 
-## 能做什么
+当前工作树以 [MIT License](LICENSE) 发布。2.x 标签和更早 Git 提交仍保持其原有 GPL-3.0
+许可；转换边界与可重复审计方法见 [许可证转换说明](docs/LICENSE_TRANSITION.md)。
 
-- 从系统文件选择器导入 Smart Assistant `Widget version="2"` ZIP。
-- 完成 ZIP Slip、DOCTYPE、条目数、体积和危险命令检查。
-- 将模板安全部署到 `com.xiaomi.subscreencenter` 可读目录。
-- 不依赖 Android 通知，直接使用宿主 Smart Assistant 原生运行管线显示和隐藏卡片。
-- 删除单张或全部 OuterView 卡片，并验证背屏 runtime 已真正移除。
-- 通过独立 `core` Android Library 为其他 UI 提供卡片管理端点。
+## 功能
+
+- 从系统文件选择器导入并校验 Smart Assistant `Widget version="2"` ZIP。
+- 防护 ZIP Slip、DOCTYPE、异常条目数/体积，并提示危险 MAML 命令。
+- 经宿主 Smart Assistant 原生运行管线安装、显示、隐藏和删除自定义卡片。
+- 导入、选择、重命名和删除 OuterView 自有背屏壁纸。
+- 通过无 Compose 的 `core` Android Library 提供卡片管理端点。
 
 ## 使用条件
 
-- 小米 17 Pro / 17 Pro Max，兼容 Android 16 及 HyperOS 4 背屏服务。
-- Magisk 或 KernelSU 环境及可用的 LSPosed 实现。
-- LSPosed 作用域必须勾选 `com.xiaomi.subscreencenter`。
+- 小米 17 Pro / 17 Pro Max，Android 16 / HyperOS 4 背屏服务。
+- Magisk 或 KernelSU，以及可用的 LSPosed 实现。
+- LSPosed 作用域包含 `com.xiaomi.subscreencenter`。
 
 ## 安装使用
 
-1. 安装 Release APK。
-2. 在 LSPosed 中启用 OuterView，并将作用域设为“小米背屏中心” `com.xiaomi.subscreencenter`。
-3. 强制停止背屏中心或重启设备，使 Hook 生效。
-4. 打开 OuterView，顶部应显示 Assistant 与 Wallpaper Host 的连接状态。
-5. 点击右下角 `+`，选择卡片 ZIP。校验通过后会自动安装，但不会自动显示。
-6. 打开卡片开关即可显示；关闭开关只隐藏，不删除模板。
-7. 在更多菜单中可替换模板、编辑 payload、查看诊断或永久删除。
+1. 安装 APK，在 LSPosed 中启用 OuterView 并勾选“小米背屏中心”。
+2. 强制停止背屏中心或重启设备。
+3. 打开 OuterView，确认 Assistant 与 Wallpaper Host 已连接。
+4. 点击 `+` 导入卡片 ZIP；安装完成后手动开启显示。
+5. 通过更多菜单替换模板、编辑 payload、查看诊断或永久删除。
 
-首次测试可直接导入 [Dino Run](demo/dino-run/dino-run.zip)。
+首次测试可导入 [Hello Card](demo/hello-card/hello-card.zip)。
 
-## 仓库结构
-
-```text
-app/                 Compose 管理器与宿主 LSPosed Hook
-core/                无 UI 的卡片管理 API
-demo/dino-run/       可导入 ZIP、MAML 源码和预览
-docs/                架构、二次开发与卡片适配文档
-```
-
-## 构建
+## 构建与验证
 
 要求 JDK 17、Android SDK 36：
-
-Windows PowerShell：
 
 ```powershell
 $env:JAVA_HOME = "C:\Program Files\Android\Android Studio\jbr"
 .\gradlew.bat :core:testDebugUnitTest :app:assembleDebug
+py -3 demo/hello-card/build_card.py --check
 ```
 
-Linux / macOS：
+Debug APK 位于 `app/build/outputs/apk/debug/app-debug.apk`。许可证审计命令见
+[许可证转换说明](docs/LICENSE_TRANSITION.md)，第三方通知见
+[`LICENSES/NOTICE.md`](LICENSES/NOTICE.md)。这些通知也会嵌入 APK 的 `assets/`。
 
-```bash
-export JAVA_HOME=/path/to/jdk17
-./gradlew :core:testDebugUnitTest :app:assembleDebug
+## 仓库结构
+
+```text
+app/                 Compose 管理器、独立 DEX 查询器与 LSPosed Hook
+core/                无 UI 的卡片/壁纸 Host API
+demo/hello-card/     MIT 可分发的最小 MAML 卡片
+LICENSES/            运行时依赖许可证和通知
+tools/               相似代码与依赖审计工具
+docs/                架构、二次开发和迁移说明
 ```
-
-Debug APK 位于 `app/build/outputs/apk/debug/app-debug.apk`。
-
-构建未签名 Release APK：
-
-```powershell
-.\gradlew.bat :core:testDebugUnitTest :app:assembleRelease
-```
-
-Release 产物位于 `app/build/outputs/apk/release/app-release-unsigned.apk`。公开发布前需要使用自己的长期签名密钥签名；不要把 `.jks`、密码或 `local.properties` 提交到 Git。
-
-## 二次开发
-
-UI 层只依赖 `RearCardManagementEndpoints`：
-
-```kotlin
-val cards = RearCardManager.create(context)
-val snapshot = cards.refresh()
-val result = cards.setVisible(cardId, true)
-```
-
-完整端点、状态机和 Compose 集成方式见 [二次开发指南](docs/DEVELOPMENT.md)。卡片 ZIP 的结构、元数据、payload 与安全约束见 [卡片适配指南](docs/CARD_DEVELOPMENT.md)。
 
 ## 安全边界
 
-OuterView 只允许管理 `reareye_custom_` 前缀且位于专属目录的模板，不修改系统模板或 `notification_widget.json`。导入 ZIP 仍然属于可执行 MAML 内容，请只安装可信来源的卡片。详见 [SECURITY.md](SECURITY.md)。
+OuterView 新资源固定使用 `outerview_custom_` / `outerview_wallpaper_` 前缀及专属 registry。
+系统模板、系统持久化文件和其他模块资源不属于管理范围。旧前缀只在本应用签名权限保护的
+Host API 和本应用 registry 记录共同成立时兼容。导入 ZIP 仍是可执行 MAML 内容，请只安装
+可信来源的卡片。详见 [SECURITY.md](SECURITY.md)。
 
-## 许可证
+## AI 创作声明
 
-OuterView 源码以 [GPL-3.0](LICENSE) 发布。Dino Run 的 MAML 和构建脚本同样适用 GPL-3.0；演示卡片内的媒体素材具有单独来源说明，见 [DINO-ASSETS.md](LICENSES/DINO-ASSETS.md)。
+此项目部分编码和测试由 GPT-5.6-Sol 完成。软件按 MIT License 的“AS IS”条款提供，不对
+安全性、可用性或文档正确性作额外保证。
 
-## 致谢
+## 声明
 
-- REAREye 项目提供了早期背屏研究基础。
-- YukiHookAPI、DexKit、KavaRef、MMKV 及 AndroidX Compose。
-- 小米 Smart Assistant / MAML 运行时由设备系统提供，OuterView 与小米公司无隶属关系。
+小米、HyperOS、Smart Assistant 与 MAML 的相关权利归各自权利人所有。OuterView 是独立
+社区项目，与小米公司及其他背屏模块项目均无隶属或背书关系。

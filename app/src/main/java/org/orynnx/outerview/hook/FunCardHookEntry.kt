@@ -18,10 +18,4 @@ class FunCardHookEntry : IYukiHookXposedInit {
     override fun onHook() {
         encase(CustomRearCardHook(), RearWallpaperHostHook())
     }
-
-    companion object {
-        init {
-            System.loadLibrary("dexkit")
-        }
-    }
 }

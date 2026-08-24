@@ -1,0 +1,21 @@
+allprojects {
+    tasks.register("printRuntimeCoordinates") {
+        group = "verification"
+        description = "Prints the exact resolved debug runtime components for license review."
+        doLast {
+            def runtime = configurations.findByName("debugRuntimeClasspath")
+            if (runtime == null) {
+                throw new GradleException("debugRuntimeClasspath is unavailable in ${project.path}")
+            }
+            runtime.incoming.resolutionResult.allComponents
+                .collect { component ->
+                    def id = component.moduleVersion
+                    id == null ? null : "${id.group}:${id.name}:${id.version}"
+                }
+                .findAll { it != null }
+                .unique()
+                .sort()
+                .each { println("OUTERVIEW_RUNTIME " + it) }
+        }
+    }
+}

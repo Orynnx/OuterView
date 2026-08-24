@@ -15,14 +15,20 @@ android {
         applicationId = "org.orynnx.outerview"
         minSdk = 36
         targetSdk = 36
-        versionCode = 9
-        versionName = "2.3.2"
+        versionCode = 10
+        versionName = "3.0.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
     buildFeatures {
         buildConfig = true
         compose = true
+    }
+
+    sourceSets {
+        named("main") {
+            assets.directories.add(rootProject.file("LICENSES").absolutePath)
+        }
     }
 
     compileOptions {
@@ -44,8 +50,7 @@ dependencies {
     implementation(libs.yukihookapi)
     implementation(libs.kavaref.core)
     implementation(libs.kavaref.extension)
-    implementation(libs.dexkit)
-    implementation(libs.mmkv)
+    implementation(libs.smali.dexlib2)
 
     implementation(platform(libs.compose.bom))
     implementation(libs.androidx.activity.compose)

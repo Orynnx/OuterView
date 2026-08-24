@@ -7,12 +7,12 @@ plugins {
 }
 
 android {
-    namespace = "hk.uwu.reareye.funcardcore"
     compileSdk = 36
+    namespace = "org.orynnx.outerview.core"
 
     defaultConfig {
-        minSdk = 36
         consumerProguardFiles("consumer-rules.pro")
+        minSdk = 36
     }
 
     buildFeatures {
@@ -20,15 +20,15 @@ android {
         buildConfig = false
     }
 
-    compileOptions {
-        sourceCompatibility = JavaVersion.VERSION_17
-        targetCompatibility = JavaVersion.VERSION_17
-    }
-
     publishing {
         singleVariant("release") {
             withSourcesJar()
         }
+    }
+
+    compileOptions {
+        targetCompatibility = JavaVersion.VERSION_17
+        sourceCompatibility = JavaVersion.VERSION_17
     }
 }
 
@@ -37,9 +37,9 @@ tasks.withType<KotlinJvmCompile>().configureEach {
 }
 
 dependencies {
+    implementation(libs.gson)
     implementation(libs.androidx.core.ktx)
     implementation(libs.kotlinx.coroutines.core)
-    implementation(libs.gson)
     testImplementation(libs.junit)
 }
 

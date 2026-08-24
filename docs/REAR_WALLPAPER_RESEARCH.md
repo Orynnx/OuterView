@@ -26,7 +26,7 @@
 
 需要在 `com.xiaomi.subscreencenter` 解析四类锚点：读取 runtime/default JSON 的方法、spec 到 widget
 的 factory、MainPanel 的 widget/索引字段及选择方法、刷新后可用于确认状态的运行列表。应使用字符串和
-方法签名联合 DexKit 定位并按宿主版本缓存；任一关键锚点缺失时 Host API 返回“不支持”，不得写 runtime。
+方法签名和稳定字符串由 OuterView 自有 `HostDexResolver` 联合定位，并按宿主 APK SHA-256 与版本缓存；任一关键锚点缺失时 Host API 返回“不支持”，不得写 runtime。解析器只使用 BSD-3-Clause 的 `smali-dexlib2` 读取 DEX，不加载 native 库。
 
 Android 16 的小米 17 Pro/Max 是当前唯一目标。系统更新可能改变混淆名、runtime schema、文件权限和
 MainPanel 生命周期，因此必须在真机确认后才启用写操作。ThemeManager 同步留作后续可选模块。

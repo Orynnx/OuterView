@@ -1,5 +1,16 @@
 # Changelog
 
+## 3.0.0 - 2026-08-24
+
+- 移除 DexKit、MMKV 和复制自 REAREye 的四个工具文件，以项目自有 DEX 查询器和
+  BSD-3-Clause 的 `smali-dexlib2` 重新实现 HyperOS 4 Hook 入口发现与缓存。
+- 将 Core/AIDL 命名空间迁移至 `org.orynnx.outerview.core`，新卡片改用
+  `outerview_custom_` 标识；旧标识只保留受控数据迁移兼容。
+- 删除许可证无法随包核验的 Dino Run 媒体，加入只含原创 MAML 图形和文本的 Hello Card。
+- 对 REAREye 全部 170 个提交、844 个历史源码 blob 建立相似代码门禁，并加入实际解析
+  runtime classpath 的依赖许可证审计工具。
+- 当前工作树切换为 MIT License；2.x 标签和旧提交继续保持原 GPL-3.0 许可。
+
 ## 2.3.2 - 2026-08-24
 
 - 兼容 HyperOS 4 的 Smart Assistant 原生 Post Runnable：运行时解析 MainPanel 宿主对象，恢复自定义卡片启用和加载。

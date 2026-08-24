@@ -18,27 +18,19 @@ import com.highcapable.kavaref.KavaRef.Companion.asResolver
 import com.highcapable.kavaref.KavaRef.Companion.resolve
 import com.highcapable.yukihookapi.hook.entity.YukiBaseHooker
 import com.highcapable.yukihookapi.hook.log.YLog
-import hk.uwu.reareye.funcardcore.hostapi.FunCardHostContract
-import hk.uwu.reareye.funcardcore.hostapi.IFunCardHostConnection
-import hk.uwu.reareye.funcardcore.hostapi.IFunCardHostService
-import hk.uwu.reareye.funcardcore.internal.ManagedHostPaths
-import hk.uwu.reareye.funcardcore.internal.SecureManifestXml
-import hk.uwu.reareye.hook.utils.DexKitMethodInjectionPoint
-import hk.uwu.reareye.hook.utils.createDexKitCacheBridge
-import hk.uwu.reareye.hook.utils.resolveDexKitClassValue
-import hk.uwu.reareye.hook.utils.resolveDexKitFieldValue
-import hk.uwu.reareye.hook.utils.resolveDexKitMethodInjectionPoint
-import hk.uwu.reareye.hook.utils.resolveHookPackageVersionCode
+import org.orynnx.outerview.core.hostapi.FunCardHostContract
+import org.orynnx.outerview.core.hostapi.IFunCardHostConnection
+import org.orynnx.outerview.core.hostapi.IFunCardHostService
+import org.orynnx.outerview.core.internal.ManagedHostPaths
+import org.orynnx.outerview.core.internal.SecureManifestXml
+import org.orynnx.outerview.hook.dex.HostClassQuery
+import org.orynnx.outerview.hook.dex.HostDexResolver
+import org.orynnx.outerview.hook.dex.HostFieldQuery
+import org.orynnx.outerview.hook.dex.HostMethodQuery
+import org.orynnx.outerview.hook.dex.HostMethodRef
 import org.json.JSONArray
 import org.json.JSONObject
-import org.luckypray.dexkit.DexKitBridge
-import org.luckypray.dexkit.DexKitCacheBridge
-import org.luckypray.dexkit.annotations.DexKitExperimentalApi
-import org.luckypray.dexkit.result.ClassData
-import org.luckypray.dexkit.result.FieldData
-import org.luckypray.dexkit.result.MethodData
 import java.io.File
-import java.lang.reflect.Modifier
 import java.util.Collections
 import java.util.UUID
 import java.util.WeakHashMap
@@ -50,7 +42,6 @@ import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.atomic.AtomicReference
 import java.util.zip.ZipFile
 
-@OptIn(DexKitExperimentalApi::class)
 class CustomRearCardHook : YukiBaseHooker() {
     private data class HostCard(
         val cardId: String,
@@ -131,7 +122,7 @@ class CustomRearCardHook : YukiBaseHooker() {
     @Volatile private var hostContext: Context? = null
     @Volatile private var manager: Any? = null
     @Volatile private var receiverRegistered = false
-    private var dexKitBridge: DexKitCacheBridge.RecyclableBridge? = null
+    private var hostDex: HostDexResolver? = null
 
     private val hostBinder = object : IFunCardHostService.Stub() {
         override fun getCapabilities(): Bundle {
@@ -428,8 +419,8 @@ class CustomRearCardHook : YukiBaseHooker() {
     override fun onHook() {
         loadApp(HOST_PACKAGE) {
             YLog.info("[$TAG] hook process=$processName")
-            val versionCode = resolveHookPackageVersionCode(systemContext, appInfo.packageName, appInfo.sourceDir)
-            dexKitBridge = createDexKitCacheBridge(appInfo.packageName, versionCode, appInfo.sourceDir, appInfo.dataDir)
+            val versionCode = hostPackageVersionCode(systemContext, appInfo.packageName, appInfo.sourceDir)
+            hostDex = HostDexResolver.open(appInfo.sourceDir, appInfo.dataDir, versionCode)
             loadRegistry()
 
             "com.xiaomi.subscreencenter.SubScreenCenterApp".toClass().resolve().firstMethod {
@@ -702,7 +693,7 @@ class CustomRearCardHook : YukiBaseHooker() {
         val cardId = bundle.getString(FunCardHostContract.Keys.CARD_ID)?.trim().orEmpty()
         val business = bundle.getString(FunCardHostContract.Keys.BUSINESS)?.trim().orEmpty()
         require(cardId.matches(SAFE_CARD_ID)) { "cardId 无效" }
-        require(business == "reareye_custom_$cardId") { "business 与 cardId 不匹配" }
+        require(ManagedHostPaths.matchesBusiness(cardId, business)) { "business 与 cardId 不匹配" }
         return CardCommand(
             cardId,
             business,
@@ -1229,17 +1220,21 @@ class CustomRearCardHook : YukiBaseHooker() {
         "/data/system/theme_magic/users/${Process.myUid() / 100000}/subscreencenter/smart_assistant"
 
     private fun registryDir(): File = File(
-        "/data/system/theme_magic/users/${Process.myUid() / 100000}/subscreencenter/reareye_custom_cards"
+        "/data/system/theme_magic/users/${Process.myUid() / 100000}/subscreencenter/outerview_cards"
     )
 
     private fun registryFile(): File = File(registryDir(), "registry.json")
+
+    private fun legacyRegistryFile(): File = File(
+        "/data/system/theme_magic/users/${Process.myUid() / 100000}/subscreencenter/reareye_custom_cards/registry.json"
+    )
 
     private fun businessPath(business: String): String? =
         cards.values.firstOrNull { it.business == business }?.templatePath
 
     private fun loadRegistry() {
         synchronized(registryLock) {
-            val file = registryFile()
+            val file = registryFile().takeIf(File::isFile) ?: legacyRegistryFile()
             if (!file.isFile) return
             runCatching {
                 val root = JSONObject(file.readText())
@@ -1250,7 +1245,7 @@ class CustomRearCardHook : YukiBaseHooker() {
                     val business = item.optString("business")
                     val path = item.optString("templatePath")
                     val target = File(path)
-                    if (!cardId.matches(SAFE_CARD_ID) || business != "reareye_custom_$cardId" ||
+                    if (!ManagedHostPaths.matchesBusiness(cardId, business) ||
                         !isManagedTemplate(target) || !target.isFile
                     ) continue
                     val enabled = item.optBoolean("enabled")
@@ -1273,8 +1268,10 @@ class CustomRearCardHook : YukiBaseHooker() {
                 val pendingBusinesses = root.optJSONArray("pendingBulkBusinesses") ?: JSONArray()
                 for (index in 0 until pendingBusinesses.length()) {
                     val business = pendingBusinesses.optString(index)
-                    val cardId = business.removePrefix("reareye_custom_")
-                    if (business == "reareye_custom_$cardId" && cardId.matches(SAFE_CARD_ID)) {
+                    val cardId = business
+                        .removePrefix(ManagedHostPaths.BusinessPrefix)
+                        .removePrefix(ManagedHostPaths.LegacyBusinessPrefix)
+                    if (ManagedHostPaths.matchesBusiness(cardId, business)) {
                         pendingBulkBusinesses.add(business)
                         suppressedBusinesses.add(business)
                     }
@@ -1399,7 +1396,11 @@ class CustomRearCardHook : YukiBaseHooker() {
                 val extras = managerWidgetBundle(widget) ?: return@mapNotNull null
                 val business = extras.getString("business") ?: return@mapNotNull null
                 val pkg = widgetPackage(extras, business)
-                business.takeIf { pkg == TESTER_PACKAGE && it.startsWith("reareye_custom_") }
+                business.takeIf {
+                    pkg == TESTER_PACKAGE &&
+                        (it.startsWith(ManagedHostPaths.BusinessPrefix) ||
+                            it.startsWith(ManagedHostPaths.LegacyBusinessPrefix))
+                }
             }.toSet()
         }
     }
@@ -1517,147 +1518,188 @@ class CustomRearCardHook : YukiBaseHooker() {
         return digest.digest().joinToString("") { "%02x".format(it) }
     }
 
-    private inline fun resolveCachedMethod(
-        key: String,
-        crossinline finder: DexKitBridge.() -> MethodData?,
-    ): DexKitMethodInjectionPoint {
-        val bridge = dexKitBridge ?: error("DexKit 未初始化")
-        return resolveDexKitMethodInjectionPoint(bridge, "FUN_CARD_$key") { finder() }
+    private fun resolveMethod(key: String, query: HostMethodQuery): HostMethodRef =
+        hostDex?.method("FUN_CARD_$key", query)
             ?.takeIf { it.className.isNotBlank() && it.methodName.isNotBlank() }
             ?: error("无法解析方法 $key")
-    }
 
-    private inline fun resolveCachedClass(
-        key: String,
-        crossinline finder: DexKitBridge.() -> ClassData?,
-    ): String {
-        val bridge = dexKitBridge ?: error("DexKit 未初始化")
-        return resolveDexKitClassValue(bridge, "FUN_CARD_$key") { finder() }
-            ?.takeIf(String::isNotBlank) ?: error("无法解析类 $key")
-    }
+    private fun resolveClass(key: String, query: HostClassQuery): String =
+        hostDex?.className("FUN_CARD_$key", query)
+            ?.takeIf(String::isNotBlank)
+            ?: error("无法解析类 $key")
 
-    private inline fun resolveCachedField(
-        key: String,
-        crossinline finder: DexKitBridge.() -> FieldData?,
-    ): String {
-        val bridge = dexKitBridge ?: error("DexKit 未初始化")
-        return resolveDexKitFieldValue(bridge, "FUN_CARD_$key") { finder() }
-            ?.takeIf(String::isNotBlank) ?: error("无法解析字段 $key")
-    }
+    private fun resolveField(key: String, query: HostFieldQuery): String =
+        hostDex?.fieldName("FUN_CARD_$key", query)
+            ?.takeIf(String::isNotBlank)
+            ?: error("无法解析字段 $key")
 
-    private fun resolveManagerInitMethod() = resolveCachedMethod("MANAGER_INIT") {
-        findMethod { matcher {
-            paramTypes(Context::class.java); returnType = "void"
-            usingStrings("SmartAssistantManager initialized", "SmartAssistant not supported, skip manager initialization")
-        } }.singleOrNull()
-    }
+    private fun resolveManagerInitMethod() = resolveMethod(
+        "MANAGER_INIT",
+        HostMethodQuery(
+            parameterTypes = listOf(Context::class.java.name),
+            returnType = "void",
+            strings = setOf(
+                "SmartAssistantManager initialized",
+                "SmartAssistant not supported, skip manager initialization",
+            ),
+        ),
+    )
 
-    private fun resolveParseWidgetMethod() = resolveCachedMethod("PARSE_WIDGET") {
-        findMethod { matcher {
-            paramCount(2); usingStrings("Found business in rear.paramV1: %s", "No business found for %s and not in config")
-        } }.singleOrNull()
-    }
+    private fun resolveParseWidgetMethod() = resolveMethod(
+        "PARSE_WIDGET",
+        HostMethodQuery(
+            parameterCount = 2,
+            strings = setOf(
+                "Found business in rear.paramV1: %s",
+                "No business found for %s and not in config",
+            ),
+        ),
+    )
 
     private fun resolveUtilsClassName() = resolveParseWidgetMethod().className
 
-    private fun resolvePathMethod() = resolveCachedMethod("RESOLVE_PATH") {
-        findMethod { matcher {
-            declaredClass = resolveUtilsClassName(); paramTypes(String::class.java, String::class.java)
-            returnType = "java.lang.String"; usingStrings("unified.music", "music")
-        } }.singleOrNull()
-    }
+    private fun resolvePathMethod() = resolveMethod(
+        "RESOLVE_PATH",
+        HostMethodQuery(
+            owner = resolveUtilsClassName(),
+            parameterTypes = listOf(String::class.java.name, String::class.java.name),
+            returnType = String::class.java.name,
+            strings = setOf("unified.music", "music"),
+        ),
+    )
 
-    private fun resolveAllowAppMethod() = resolveCachedMethod("ALLOW_APP") {
-        findMethod { matcher {
-            declaredClass = resolveUtilsClassName()
-            paramTypes("java.lang.String", "java.util.Set", "java.util.Map")
-            returnType = "boolean"
-            usingStrings("Music app %s allowed: %s (music switch: %s)", "Multi-business app %s allowed: false (no business enabled)")
-        } }.singleOrNull()
-    }
+    private fun resolveAllowAppMethod() = resolveMethod(
+        "ALLOW_APP",
+        HostMethodQuery(
+            owner = resolveUtilsClassName(),
+            parameterTypes = listOf("java.lang.String", "java.util.Set", "java.util.Map"),
+            returnType = "boolean",
+            strings = setOf(
+                "Music app %s allowed: %s (music switch: %s)",
+                "Multi-business app %s allowed: false (no business enabled)",
+            ),
+        ),
+    )
 
-    private fun resolvePostRunnableClassName() = resolveCachedClass("POST_RUNNABLE") {
-        findClass { matcher {
-            usingStrings("No valid params: %s", "Using compositeKey: %s (business: %s)")
-        } }.singleOrNull()
-    }
+    private fun resolvePostRunnableClassName() = resolveClass(
+        "POST_RUNNABLE",
+        HostClassQuery(
+            strings = setOf(
+                "No valid params: %s",
+                "Using compositeKey: %s (business: %s)",
+            ),
+        ),
+    )
 
-    private fun resolveManagerListFieldName() = resolveCachedField("MANAGER_LIST") {
+    private fun resolveManagerInsertMethod(): HostMethodRef {
         val managerClass = resolveManagerInitMethod().className
-        findField { searchPackages(managerClass.substringBeforeLast('.')); matcher {
-            declaredClass = managerClass; type = "java.util.ArrayList"
-            readMethods { add { usingStrings("Inserted widget at position %d, type=%s, new display index=%d") } }
-        } }.singleOrNull()
+        return resolveMethod(
+            "MANAGER_INSERT",
+            HostMethodQuery(
+                owner = managerClass,
+                parameterCount = 1,
+                returnType = "void",
+                strings = setOf("Inserted widget at position %d, type=%s, new display index=%d"),
+            ),
+        )
     }
 
-    private fun resolveRemoveBusinessMethod() = resolveCachedMethod("REMOVE_BUSINESS") {
+    private fun resolveManagerListFieldName(): String {
         val managerClass = resolveManagerInitMethod().className
-        findMethod { matcher {
-            declaredClass = managerClass
-            paramTypes(String::class.java, String::class.java)
-            returnType = "void"
-            usingStrings("Removing widgets for %s:%s")
-        } }.singleOrNull()
+        return resolveField(
+            "MANAGER_LIST",
+            HostFieldQuery(
+                owner = managerClass,
+                type = "java.util.ArrayList",
+                readBy = resolveManagerInsertMethod(),
+            ),
+        )
     }
 
-    private fun resolveRemoveNotificationMethod() = resolveCachedMethod("REMOVE_NOTIFICATION") {
+    private fun resolveRemoveBusinessMethod(): HostMethodRef {
         val managerClass = resolveManagerInitMethod().className
-        findMethod { matcher {
-            declaredClass = managerClass
-            paramCount(3)
-            returnType = "void"
-            usingStrings("Widget not found for multi-business app: %s, ID: %d")
-        } }.singleOrNull()
+        return resolveMethod(
+            "REMOVE_BUSINESS",
+            HostMethodQuery(
+                owner = managerClass,
+                parameterTypes = listOf(String::class.java.name, String::class.java.name),
+                returnType = "void",
+                strings = setOf("Removing widgets for %s:%s"),
+            ),
+        )
     }
 
-    private fun resolveRemoveCompositeMethod() = resolveCachedMethod("REMOVE_COMPOSITE") {
+    private fun resolveRemoveNotificationMethod(): HostMethodRef {
         val managerClass = resolveManagerInitMethod().className
-        findMethod { matcher {
-            declaredClass = managerClass
-            paramTypes("int", "java.lang.String", "java.lang.String")
-            returnType = "boolean"
-            usingStrings("Found widget for compositeKey: %s, removing")
-        } }.singleOrNull()
+        return resolveMethod(
+            "REMOVE_NOTIFICATION",
+            HostMethodQuery(
+                owner = managerClass,
+                parameterCount = 3,
+                returnType = "void",
+                strings = setOf("Widget not found for multi-business app: %s, ID: %d"),
+            ),
+        )
     }
 
-    private fun resolveWidgetExtrasFieldName() = resolveCachedField("WIDGET_EXTRAS") {
+    private fun resolveRemoveCompositeMethod(): HostMethodRef {
         val managerClass = resolveManagerInitMethod().className
-        val insertData = findMethod { matcher {
-            declaredClass = managerClass; paramCount(1); returnType = "void"
-            usingStrings("Inserted widget at position %d, type=%s, new display index=%d")
-        } }.singleOrNull() ?: return@resolveCachedField null
-        val insertPoint = DexKitMethodInjectionPoint(insertData.className, insertData.methodName)
+        return resolveMethod(
+            "REMOVE_COMPOSITE",
+            HostMethodQuery(
+                owner = managerClass,
+                parameterTypes = listOf("int", "java.lang.String", "java.lang.String"),
+                returnType = "boolean",
+                strings = setOf("Found widget for compositeKey: %s, removing"),
+            ),
+        )
+    }
+
+    private fun resolveWidgetExtrasFieldName(): String {
+        val insertPoint = resolveManagerInsertMethod()
         val recordClass = insertPoint.className.toClass().resolve().firstMethod {
             name = insertPoint.methodName
             parameterCount = 1
-        }.self.parameterTypes.firstOrNull()?.name ?: return@resolveCachedField null
-        findField { searchPackages(recordClass.substringBeforeLast('.')); matcher {
-            declaredClass = recordClass; type = "android.os.Bundle"
-        } }.singleOrNull()
+        }.self.parameterTypes.firstOrNull()?.name ?: error("无法解析卡片记录类型")
+        return resolveField(
+            "WIDGET_EXTRAS",
+            HostFieldQuery(owner = recordClass, type = Bundle::class.java.name),
+        )
     }
 
-    private fun resolveNotificationWidgetApplyMethod() = resolveCachedMethod("WIDGET_APPLY") {
-        findMethod { matcher { returnType = "void"; usingStrings("notification_received", "params_transferred") } }
-            .singleOrNull()
-    }
+    private fun resolveNotificationWidgetApplyMethod() = resolveMethod(
+        "WIDGET_APPLY",
+        HostMethodQuery(
+            returnType = "void",
+            strings = setOf("notification_received", "params_transferred"),
+        ),
+    )
 
     private fun resolveNotificationWidgetHostClassName(): String =
         resolveNotificationWidgetApplyMethod().className.toClass().superclass?.name ?: error("无法解析通知卡片类")
 
-    private fun resolveNotificationWidgetTemplatePathFieldName() = resolveCachedField("WIDGET_PATH") {
+    private fun resolveNotificationWidgetTemplatePathFieldName(): String {
         val hostClass = resolveNotificationWidgetHostClassName()
-        findField { searchPackages(hostClass.substringBeforeLast('.')); matcher {
-            declaredClass = hostClass; type = "java.lang.String"
-            readMethods { add { declaredClass = hostClass; paramTypes(Context::class.java); returnType = "android.view.View"; usingStrings("onCreate path =") } }
-        } }.singleOrNull()
+        val reader = resolveMethod(
+            "WIDGET_PATH_READER",
+            HostMethodQuery(
+                owner = hostClass,
+                parameterTypes = listOf(Context::class.java.name),
+                returnType = "android.view.View",
+                strings = setOf("onCreate path ="),
+            ),
+        )
+        return resolveField(
+            "WIDGET_PATH",
+            HostFieldQuery(owner = hostClass, type = String::class.java.name, readBy = reader),
+        )
     }
 
-    private fun resolveNotificationWidgetExtrasFieldName() = resolveCachedField("LIVE_WIDGET_EXTRAS") {
-        val baseClass = resolveNotificationWidgetHostClassName().toClass().superclass?.name ?: return@resolveCachedField null
+    private fun resolveNotificationWidgetExtrasFieldName(): String {
         val apply = resolveNotificationWidgetApplyMethod()
-        findField { searchPackages(baseClass.substringBeforeLast('.')); matcher {
-            declaredClass = baseClass; type = "android.os.Bundle"
-            readMethods { add { declaredClass = apply.className; name = apply.methodName; paramCount(1); returnType = "void" } }
-        } }.singleOrNull()
+        return resolveField(
+            "LIVE_WIDGET_EXTRAS",
+            HostFieldQuery(type = Bundle::class.java.name, readBy = apply),
+        )
     }
 }

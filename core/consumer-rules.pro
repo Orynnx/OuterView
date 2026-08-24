@@ -1,3 +1,3 @@
--keep public class hk.uwu.reareye.funcardcore.** { public protected *; }
--keep class hk.uwu.reareye.funcardcore.hostapi.IFunCardHostService** { *; }
--keep class hk.uwu.reareye.funcardcore.hostapi.IFunCardHostConnection** { *; }
+-keep public class org.orynnx.outerview.core.** { public protected *; }
+-keep class org.orynnx.outerview.core.hostapi.IFunCardHostService** { *; }
+-keep class org.orynnx.outerview.core.hostapi.IFunCardHostConnection** { *; }

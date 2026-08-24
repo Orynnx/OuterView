@@ -21,4 +21,4 @@ Compose UI
 
 ## 文件边界
 
-宿主模板位于当前用户的 `subscreencenter/smart_assistant/reareye_custom_<cardId>`，是无扩展名 ZIP。Hook 只删除规范化后位于该目录且名称符合专属前缀的文件。系统模板与 `notification_widget.json` 永远只读。
+宿主模板位于当前用户的 `subscreencenter/smart_assistant/outerview_custom_<cardId>`，是无扩展名 ZIP。Hook 只删除规范化后位于该目录且名称符合专属前缀的文件。3.0 仅在本应用旧 registry 已记录相同 `cardId` 时兼容旧前缀；系统模板、其他模块模板与 `notification_widget.json` 永远只读。

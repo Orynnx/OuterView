@@ -65,9 +65,9 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import hk.uwu.reareye.funcardcore.wallpaperapi.RearWallpaperHostClient
-import hk.uwu.reareye.funcardcore.wallpaperapi.RearWallpaperHostContract
-import hk.uwu.reareye.funcardcore.wallpaperapi.RearWallpaperHostInfo
+import org.orynnx.outerview.core.wallpaperapi.RearWallpaperHostClient
+import org.orynnx.outerview.core.wallpaperapi.RearWallpaperHostContract
+import org.orynnx.outerview.core.wallpaperapi.RearWallpaperHostInfo
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay

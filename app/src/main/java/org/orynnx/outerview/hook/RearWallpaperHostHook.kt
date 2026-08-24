@@ -15,36 +15,32 @@ import com.highcapable.kavaref.KavaRef.Companion.asResolver
 import com.highcapable.kavaref.KavaRef.Companion.resolve
 import com.highcapable.yukihookapi.hook.entity.YukiBaseHooker
 import com.highcapable.yukihookapi.hook.log.YLog
-import hk.uwu.reareye.funcardcore.internal.ManagedRearWallpaperPaths
-import hk.uwu.reareye.funcardcore.internal.RearWallpaperPackageValidator
-import hk.uwu.reareye.funcardcore.internal.RearWallpaperRuntimeCodec
-import hk.uwu.reareye.funcardcore.internal.RearWallpaperRuntimeRecord
-import hk.uwu.reareye.funcardcore.wallpaperapi.IRearWallpaperHostConnection
-import hk.uwu.reareye.funcardcore.wallpaperapi.IRearWallpaperHostService
-import hk.uwu.reareye.funcardcore.wallpaperapi.RearWallpaperHostContract
-import hk.uwu.reareye.hook.utils.DexKitMethodInjectionPoint
-import hk.uwu.reareye.hook.utils.createDexKitCacheBridge
-import hk.uwu.reareye.hook.utils.resolveDexKitMethodInjectionPoint
-import hk.uwu.reareye.hook.utils.resolveHookPackageVersionCode
+import org.orynnx.outerview.core.internal.ManagedRearWallpaperPaths
+import org.orynnx.outerview.core.internal.RearWallpaperPackageValidator
+import org.orynnx.outerview.core.internal.RearWallpaperRuntimeCodec
+import org.orynnx.outerview.core.internal.RearWallpaperRuntimeRecord
+import org.orynnx.outerview.core.wallpaperapi.IRearWallpaperHostConnection
+import org.orynnx.outerview.core.wallpaperapi.IRearWallpaperHostService
+import org.orynnx.outerview.core.wallpaperapi.RearWallpaperHostContract
+import org.orynnx.outerview.hook.dex.HostDexResolver
+import org.orynnx.outerview.hook.dex.HostMethodQuery
+import org.orynnx.outerview.hook.dex.HostMethodRef
+import org.orynnx.outerview.hook.dex.PUBLIC_STATIC
 import org.json.JSONArray
 import org.json.JSONObject
-import org.luckypray.dexkit.DexKitCacheBridge
-import org.luckypray.dexkit.annotations.DexKitExperimentalApi
 import java.io.File
-import java.lang.reflect.Modifier
 import java.util.UUID
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicReference
 
 /** Owns only OuterView-prefixed entries in the rear-screen wallpaper runtime. */
-@OptIn(DexKitExperimentalApi::class)
 class RearWallpaperHostHook : YukiBaseHooker() {
     companion object { private const val TAG = "OuterView-Wallpaper"; private const val APP = "org.orynnx.outerview" }
     private var context: Context? = null
     private var receiverRegistered = false
     private val lock = Any()
-    private var bridge: DexKitCacheBridge.RecyclableBridge? = null
+    private var hostDex: HostDexResolver? = null
     private var mainPanel: Any? = null
     private var mainHandler: Handler? = null
     private var appliedId: Int? = null
@@ -52,7 +48,8 @@ class RearWallpaperHostHook : YukiBaseHooker() {
 
     override fun onHook() {
         loadApp("com.xiaomi.subscreencenter") {
-            bridge = createDexKitCacheBridge(appInfo.packageName, resolveHookPackageVersionCode(systemContext, appInfo.packageName, appInfo.sourceDir), appInfo.sourceDir, appInfo.dataDir)
+            val versionCode = hostPackageVersionCode(systemContext, appInfo.packageName, appInfo.sourceDir)
+            hostDex = HostDexResolver.open(appInfo.sourceDir, appInfo.dataDir, versionCode)
             "com.xiaomi.subscreencenter.SubScreenCenterApp".toClass().resolve().firstMethod {
                 name = "attachBaseContext"; parameterCount = 1
             }.hook().after {
@@ -264,26 +261,53 @@ class RearWallpaperHostHook : YukiBaseHooker() {
     }.onSuccess { result -> if (result == null) YLog.warn("[$TAG] widget factory returned null spec=${spec.javaClass.name} id=$specId") }
         .onFailure { YLog.error("[$TAG] widget factory failed spec=${spec.javaClass.name}", it) }.getOrNull()
     private fun intFields(target: Any): List<Int> = generateSequence(target.javaClass) { it.superclass }.flatMap { clazz -> clazz.declaredFields.asSequence().mapNotNull { field -> runCatching { field.isAccessible = true; (field.get(target) as? Int) }.getOrNull() } }.toList()
-    private fun resolvePoint(key: String, finder: org.luckypray.dexkit.DexKitBridge.() -> org.luckypray.dexkit.result.MethodData?) = resolveDexKitMethodInjectionPoint(requireNotNull(bridge), key, finder) ?: error("DexKit failed: $key")
-    private fun runtimeListPoint(): DexKitMethodInjectionPoint = resolvePoint("OV_WALLPAPER_RUNTIME_LIST") { findMethod { matcher { paramCount(1); returnType = "java.util.List"; usingStrings("/data/system/theme_magic/users/\$user_id/rearScreen/runtime.json", "/system/media/rearscreen/template/default/rearScreen.json") } }.singleOrNull() }
-    /**
-     * HyperOS 4 moved the pin-text marker from the widget factory into the
-     * common spec class.  Locate the factory from the runtime spec type and
-     * the rear-wallpaper snapshot marker instead of requiring both unrelated
-     * strings in a single method.
-     */
-    private fun widgetFactoryPoint(specClassName: String): DexKitMethodInjectionPoint =
-        resolvePoint("OV_WALLPAPER_WIDGET_FACTORY_$specClassName") {
-            findMethod {
-                matcher {
-                    modifiers = Modifier.PUBLIC or Modifier.STATIC
-                    paramTypes(specClassName)
-                    usingStrings("snapshotPath_")
-                }
-            }.singleOrNull()
-        }
-    private fun selectPoint(): DexKitMethodInjectionPoint = resolvePoint("OV_MAIN_PANEL_SELECT") { findMethod { searchPackages("com.xiaomi.subscreencenter"); matcher { paramCount(2); returnType = "void"; usingStrings("SubScreenWidgets is empty, at least one needs to be provided !!!", "onSubScreenWidgetChanged, new widgets size = ") } }.singleOrNull() }
-    private fun saveSelectionPoint(): DexKitMethodInjectionPoint = resolvePoint("OV_MAIN_PANEL_SAVE_SELECTION") { findMethod { searchPackages("com.xiaomi.subscreencenter"); matcher { paramCount(0); returnType = "void"; usingStrings("Save user select, new index = ", "user_select") } }.singleOrNull() }
+    private fun resolvePoint(key: String, query: HostMethodQuery): HostMethodRef =
+        hostDex?.method(key, query) ?: error("Host DEX lookup failed: $key")
+
+    private fun runtimeListPoint(): HostMethodRef = resolvePoint(
+        "OV_WALLPAPER_RUNTIME_LIST",
+        HostMethodQuery(
+            parameterCount = 1,
+            returnType = "java.util.List",
+            strings = setOf(
+                "/data/system/theme_magic/users/\$user_id/rearScreen/runtime.json",
+                "/system/media/rearscreen/template/default/rearScreen.json",
+            ),
+        ),
+    )
+
+    /** HyperOS 4 identifies the widget factory by its spec type and snapshot marker. */
+    private fun widgetFactoryPoint(specClassName: String): HostMethodRef = resolvePoint(
+        "OV_WALLPAPER_WIDGET_FACTORY_$specClassName",
+        HostMethodQuery(
+            parameterTypes = listOf(specClassName),
+            requiredModifiers = PUBLIC_STATIC,
+            strings = setOf("snapshotPath_"),
+        ),
+    )
+
+    private fun selectPoint(): HostMethodRef = resolvePoint(
+        "OV_MAIN_PANEL_SELECT",
+        HostMethodQuery(
+            packagePrefix = "com.xiaomi.subscreencenter",
+            parameterCount = 2,
+            returnType = "void",
+            strings = setOf(
+                "SubScreenWidgets is empty, at least one needs to be provided !!!",
+                "onSubScreenWidgetChanged, new widgets size = ",
+            ),
+        ),
+    )
+
+    private fun saveSelectionPoint(): HostMethodRef = resolvePoint(
+        "OV_MAIN_PANEL_SAVE_SELECTION",
+        HostMethodQuery(
+            packagePrefix = "com.xiaomi.subscreencenter",
+            parameterCount = 0,
+            returnType = "void",
+            strings = setOf("Save user select, new index = ", "user_select"),
+        ),
+    )
 
     private fun import(fd: ParcelFileDescriptor?, name: String?): Bundle = runCatching { synchronized(lock) {
         requireNotNull(fd) { "empty wallpaper file" }; val sourceName = name?.takeIf(String::isNotBlank) ?: "wallpaper.mrc"

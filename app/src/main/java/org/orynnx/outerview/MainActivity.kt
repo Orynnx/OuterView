@@ -108,16 +108,16 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
 import androidx.core.content.ContextCompat
-import hk.uwu.reareye.funcardcore.CardImportPreview
-import hk.uwu.reareye.funcardcore.ManagedCardDiagnostics
-import hk.uwu.reareye.funcardcore.ManagedRearCard
-import hk.uwu.reareye.funcardcore.RearCardActionResult
-import hk.uwu.reareye.funcardcore.RearCardManager
-import hk.uwu.reareye.funcardcore.RearCardManagerCapabilities
-import hk.uwu.reareye.funcardcore.RearCardState
-import hk.uwu.reareye.funcardcore.wallpaperapi.RearWallpaperHostClient
-import hk.uwu.reareye.funcardcore.wallpaperapi.RearWallpaperHostContract
-import hk.uwu.reareye.funcardcore.hostapi.FunCardHostContract
+import org.orynnx.outerview.core.CardImportPreview
+import org.orynnx.outerview.core.ManagedCardDiagnostics
+import org.orynnx.outerview.core.ManagedRearCard
+import org.orynnx.outerview.core.RearCardActionResult
+import org.orynnx.outerview.core.RearCardManager
+import org.orynnx.outerview.core.RearCardManagerCapabilities
+import org.orynnx.outerview.core.RearCardState
+import org.orynnx.outerview.core.wallpaperapi.RearWallpaperHostClient
+import org.orynnx.outerview.core.wallpaperapi.RearWallpaperHostContract
+import org.orynnx.outerview.core.hostapi.FunCardHostContract
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
@@ -334,7 +334,7 @@ private fun AboutApp(active: Boolean) {
                         Text("OuterView", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
                         Text("面向小米背屏的管理工具", style = MaterialTheme.typography.titleMedium)
                         Text(
-                            "基于 REAREye 的探索成果构建 · 开发者凛野",
+                            "独立实现 · MIT License · 开发者凛野",
                             color = MaterialTheme.colorScheme.onPrimaryContainer,
                         )
                     }

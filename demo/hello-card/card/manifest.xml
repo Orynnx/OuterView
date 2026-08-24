@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Widget frameRate="1"
+        scaleByDensity="false"
+        screenWidth="1080"
+        version="2"
+        useVariableUpdater="DateTime.Minute">
+    <Var name="scale" type="number" expression="min((#view_width / 480),(#view_height / 304))"/>
+    <Var name="offset_x" type="number" expression="((#view_width - (480 * #scale)) / 2)"/>
+    <Var name="offset_y" type="number" expression="((#view_height - (304 * #scale)) / 2)"/>
+
+    <Group x="#offset_x" y="#offset_y" scale="#scale">
+        <Rectangle x="0" y="0" w="480" h="304" fillColor="#FF07111F"/>
+        <Rectangle x="26" y="28" w="428" h="248" fillColor="#FF10253B" cornerRadius="28,28"/>
+        <Circle x="74" y="78" r="22" fillColor="#FF65D6C1"/>
+        <Text x="112" y="69" size="20" color="#FF9FE8DC" text="OUTERVIEW" fontFamily="mipro-demibold"/>
+        <Text x="42" y="126" w="396" size="38" color="#FFFFFFFF" align="center" text="HELLO CARD" fontFamily="mipro-demibold"/>
+        <Text x="42" y="187" w="396" size="17" color="#FFABC0D4" align="center" text="MIT · NO EXTERNAL MEDIA"/>
+        <Rectangle x="154" y="233" w="172" h="4" fillColor="#FF65D6C1" cornerRadius="2,2"/>
+    </Group>
+</Widget>
