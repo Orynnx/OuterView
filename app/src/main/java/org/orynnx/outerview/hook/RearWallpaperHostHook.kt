@@ -259,14 +259,29 @@ class RearWallpaperHostHook : YukiBaseHooker() {
         return point.className.toClass().resolve().firstMethod { name = point.methodName; parameterCount = 1 }.invoke(true) as? List<Any> ?: emptyList()
     }
     private fun createWidget(spec: Any, specId: Int? = null): Any? = runCatching {
-        val point = widgetFactoryPoint()
+        val point = widgetFactoryPoint(spec.javaClass.name)
         point.className.toClass().resolve().firstMethod { name = point.methodName; parameterCount = 1 }.invoke(spec)
     }.onSuccess { result -> if (result == null) YLog.warn("[$TAG] widget factory returned null spec=${spec.javaClass.name} id=$specId") }
         .onFailure { YLog.error("[$TAG] widget factory failed spec=${spec.javaClass.name}", it) }.getOrNull()
     private fun intFields(target: Any): List<Int> = generateSequence(target.javaClass) { it.superclass }.flatMap { clazz -> clazz.declaredFields.asSequence().mapNotNull { field -> runCatching { field.isAccessible = true; (field.get(target) as? Int) }.getOrNull() } }.toList()
     private fun resolvePoint(key: String, finder: org.luckypray.dexkit.DexKitBridge.() -> org.luckypray.dexkit.result.MethodData?) = resolveDexKitMethodInjectionPoint(requireNotNull(bridge), key, finder) ?: error("DexKit failed: $key")
     private fun runtimeListPoint(): DexKitMethodInjectionPoint = resolvePoint("OV_WALLPAPER_RUNTIME_LIST") { findMethod { matcher { paramCount(1); returnType = "java.util.List"; usingStrings("/data/system/theme_magic/users/\$user_id/rearScreen/runtime.json", "/system/media/rearscreen/template/default/rearScreen.json") } }.singleOrNull() }
-    private fun widgetFactoryPoint(): DexKitMethodInjectionPoint = resolvePoint("OV_WALLPAPER_WIDGET_FACTORY") { findMethod { matcher { modifiers = Modifier.PUBLIC or Modifier.STATIC; paramCount(1); usingStrings("snapshotPath_", "snapshotPath", "__PIN_CONTENT_TEXT__") } }.singleOrNull() }
+    /**
+     * HyperOS 4 moved the pin-text marker from the widget factory into the
+     * common spec class.  Locate the factory from the runtime spec type and
+     * the rear-wallpaper snapshot marker instead of requiring both unrelated
+     * strings in a single method.
+     */
+    private fun widgetFactoryPoint(specClassName: String): DexKitMethodInjectionPoint =
+        resolvePoint("OV_WALLPAPER_WIDGET_FACTORY_$specClassName") {
+            findMethod {
+                matcher {
+                    modifiers = Modifier.PUBLIC or Modifier.STATIC
+                    paramTypes(specClassName)
+                    usingStrings("snapshotPath_")
+                }
+            }.singleOrNull()
+        }
     private fun selectPoint(): DexKitMethodInjectionPoint = resolvePoint("OV_MAIN_PANEL_SELECT") { findMethod { searchPackages("com.xiaomi.subscreencenter"); matcher { paramCount(2); returnType = "void"; usingStrings("SubScreenWidgets is empty, at least one needs to be provided !!!", "onSubScreenWidgetChanged, new widgets size = ") } }.singleOrNull() }
     private fun saveSelectionPoint(): DexKitMethodInjectionPoint = resolvePoint("OV_MAIN_PANEL_SAVE_SELECTION") { findMethod { searchPackages("com.xiaomi.subscreencenter"); matcher { paramCount(0); returnType = "void"; usingStrings("Save user select, new index = ", "user_select") } }.singleOrNull() }
 

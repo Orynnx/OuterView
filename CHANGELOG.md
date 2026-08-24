@@ -1,5 +1,11 @@
 # Changelog
 
+## 2.3.2 - 2026-08-24
+
+- 兼容 HyperOS 4 的 Smart Assistant 原生 Post Runnable：运行时解析 MainPanel 宿主对象，恢复自定义卡片启用和加载。
+- 修复 HyperOS 4 背屏壁纸 Widget 工厂的定位规则：按运行时规格类型和 `snapshotPath_` 解析，恢复自定义壁纸注入、原生切换与选择持久化。
+- 在已 Root 的 HyperOS 4 真机上验证卡片和壁纸均可由背屏中心原生加载。
+
 ## 2.3.1 - 2026-07-14
 
 - 新增基于 GitHub Release 的应用内更新检查与下载，下载文件使用专属 FileProvider 安全交付系统安装器。

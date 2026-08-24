@@ -754,17 +754,13 @@ class CustomRearCardHook : YukiBaseHooker() {
             if (managerContains(TESTER_PACKAGE, command.business)) {
                 invokeManagerRemoveBusiness(target, TESTER_PACKAGE, command.business)
             }
-            val runnableClass = resolvePostRunnableClassName().toClass()
-            val constructor = runnableClass.declaredConstructors.firstOrNull { it.parameterCount == 5 }
-                ?: error("无法解析 Smart Assistant Post Runnable 构造器")
-            constructor.isAccessible = true
-            val runnable = constructor.newInstance(
-                target,
-                runtimeId,
-                TESTER_PACKAGE,
-                compositeKey,
-                extras,
-            ) as? Runnable ?: error("宿主 Post Runnable 类型不匹配")
+            val runnable = createPostRunnable(
+                manager = target,
+                runtimeId = runtimeId,
+                packageName = TESTER_PACKAGE,
+                compositeKey = compositeKey,
+                extras = extras,
+            )
             runnable.run()
         }
         val now = System.currentTimeMillis()
@@ -798,6 +794,82 @@ class CustomRearCardHook : YukiBaseHooker() {
             error("卡片启用已被较新的停用或删除操作取消")
         }
         log("activate", command, true, "compositeKey=$compositeKey")
+    }
+
+    /**
+     * Xiaomi changed the first parameter of its notification-post runnable in
+     * HyperOS 4: it is now a [MainPanel] rather than SmartAssistantManager.
+     * Resolve that owner from the captured manager at runtime so the hook stays
+     * compatible with both layouts instead of assuming a particular obfuscated
+     * class relationship.
+     */
+    private fun createPostRunnable(
+        manager: Any,
+        runtimeId: Int,
+        packageName: String,
+        compositeKey: String,
+        extras: Bundle,
+    ): Runnable {
+        val runnableClass = resolvePostRunnableClassName().toClass()
+        val constructors = runnableClass.declaredConstructors.filter { it.parameterCount == 5 }
+        val expectedArguments = arrayOf<Any>(runtimeId, packageName, compositeKey, extras)
+        constructors.forEach { constructor ->
+            val parameterTypes = constructor.parameterTypes
+            val owner = resolvePostRunnableOwner(manager, parameterTypes[0]) ?: return@forEach
+            val arguments = arrayOf(owner, *expectedArguments)
+            if (!parameterTypes.indices.all { index -> acceptsArgument(parameterTypes[index], arguments[index]) }) {
+                return@forEach
+            }
+            val runnable = runCatching {
+                constructor.isAccessible = true
+                constructor.newInstance(*arguments) as? Runnable
+            }.onFailure {
+                YLog.warn("[$TAG] Post Runnable constructor rejected compatible arguments", it)
+            }.getOrNull()
+            if (runnable != null) {
+                YLog.info(
+                    "[$TAG] using Post Runnable constructor=" +
+                        constructor.parameterTypes.joinToString(prefix = "(", postfix = ")") { it.name } +
+                        " owner=${owner.javaClass.name}",
+                )
+                return runnable
+            }
+        }
+        val signatures = constructors.joinToString { constructor ->
+            constructor.parameterTypes.joinToString(prefix = "(", postfix = ")") { it.name }
+        }
+        error("无法为 Smart Assistant Post Runnable 解析宿主对象，候选构造器=$signatures")
+    }
+
+    private fun resolvePostRunnableOwner(manager: Any, expectedType: Class<*>): Any? {
+        if (expectedType.isInstance(manager)) return manager
+        var current: Class<*>? = manager.javaClass
+        while (current != null && current != Any::class.java) {
+            current.declaredFields.forEach { field ->
+                val value = runCatching {
+                    field.isAccessible = true
+                    field.get(manager)
+                }.getOrNull()
+                if (value != null && expectedType.isInstance(value)) return value
+            }
+            current = current.superclass
+        }
+        return null
+    }
+
+    private fun acceptsArgument(expectedType: Class<*>, value: Any): Boolean {
+        if (!expectedType.isPrimitive) return expectedType.isInstance(value)
+        return when (expectedType) {
+            Int::class.javaPrimitiveType -> value is Int
+            Long::class.javaPrimitiveType -> value is Long
+            Boolean::class.javaPrimitiveType -> value is Boolean
+            Float::class.javaPrimitiveType -> value is Float
+            Double::class.javaPrimitiveType -> value is Double
+            Short::class.javaPrimitiveType -> value is Short
+            Byte::class.javaPrimitiveType -> value is Byte
+            Char::class.javaPrimitiveType -> value is Char
+            else -> false
+        }
     }
 
     private fun deactivateCardInHost(command: CardCommand, persist: Boolean = true) {
