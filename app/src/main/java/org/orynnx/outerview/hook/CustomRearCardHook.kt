@@ -532,11 +532,11 @@ class CustomRearCardHook : YukiBaseHooker() {
                 name = point.methodName
                 parameterCount = 1
             }.hook().after {
-                val extras = extractField(instance, resolveNotificationWidgetExtrasFieldName()) as? Bundle ?: return@after
+                val extras = readInstanceField(instance, resolveNotificationWidgetExtrasFieldName()) as? Bundle ?: return@after
                 if (extras.getString("package_name") != TESTER_PACKAGE && extras.getString("creator_package") != TESTER_PACKAGE) return@after
                 val business = extras.getString("business")?.trim().orEmpty()
                 if (business.isBlank()) return@after
-                val path = extractField(instance, resolveNotificationWidgetTemplatePathFieldName()) as? String
+                val path = readInstanceField(instance, resolveNotificationWidgetTemplatePathFieldName()) as? String
                     ?: businessPath(business)
                 val readable = path?.let { File(it).isFile && File(it).canRead() } == true
                 val accepted = synchronized(lifecycleLock) {
@@ -743,7 +743,7 @@ class CustomRearCardHook : YukiBaseHooker() {
         runOnMainThread {
             val target = manager ?: error("Smart Assistant manager 尚未就绪")
             if (managerContains(TESTER_PACKAGE, command.business)) {
-                invokeManagerRemoveBusiness(target, TESTER_PACKAGE, command.business)
+                removeManagerRecord(target, ManagerRemoval.Business(TESTER_PACKAGE, command.business))
             }
             val runnable = createPostRunnable(
                 manager = target,
@@ -905,7 +905,10 @@ class CustomRearCardHook : YukiBaseHooker() {
                 current.forEach { identity ->
                     if (identity.notificationId > 0) {
                         runCatching {
-                            invokeManagerRemoveNotification(target, identity.notificationId, TESTER_PACKAGE)
+                            removeManagerRecord(
+                                target,
+                                ManagerRemoval.Notification(identity.notificationId, TESTER_PACKAGE),
+                            )
                         }.onSuccess {
                             invoked = true
                         }.onFailure {
@@ -917,13 +920,16 @@ class CustomRearCardHook : YukiBaseHooker() {
                 // records which remain after that exact lifecycle call.
                 managerWidgetIdentities(TESTER_PACKAGE, business).forEach { identity ->
                     runCatching {
-                        invokeManagerRemoveComposite(target, identity.compositeKey, TESTER_PACKAGE)
+                        removeManagerRecord(
+                            target,
+                            ManagerRemoval.Composite(identity.compositeKey, TESTER_PACKAGE),
+                        )
                     }.onSuccess {
                         invoked = true
                     }.onFailure { YLog.warn("[$TAG] composite remove failed key=${identity.compositeKey}", it) }
                 }
                 runCatching {
-                    invokeManagerRemoveBusiness(target, TESTER_PACKAGE, business)
+                    removeManagerRecord(target, ManagerRemoval.Business(TESTER_PACKAGE, business))
                 }.onSuccess {
                     invoked = true
                 }.onFailure { YLog.warn("[$TAG] business remove failed business=$business", it) }
@@ -1102,34 +1108,45 @@ class CustomRearCardHook : YukiBaseHooker() {
         return value.get()
     }
 
-    private fun invokeManagerRemoveBusiness(target: Any, packageName: String, business: String) {
-        val point = resolveRemoveBusinessMethod()
-        target.asResolver().firstMethod {
-            name = point.methodName
-            parameterCount = 2
-        }.invoke(packageName, business)
+    private sealed interface ManagerRemoval {
+        val packageName: String
+
+        data class Business(override val packageName: String, val business: String) : ManagerRemoval
+        data class Notification(val notificationId: Int, override val packageName: String) : ManagerRemoval
+        data class Composite(val compositeKey: String, override val packageName: String) : ManagerRemoval
     }
 
-    private fun invokeManagerRemoveNotification(target: Any, notificationId: Int, packageName: String) {
-        val point = resolveRemoveNotificationMethod()
-        target.asResolver().firstMethod {
-            name = point.methodName
-            parameterCount = 3
-        }.also { method ->
-            if (method.self.parameterTypes[1] == String::class.java) {
-                method.invoke(notificationId, packageName, 1)
-            } else {
-                method.invoke(notificationId, 1, packageName)
-            }
+    /**
+     * MIUI keeps three differently shaped removal operations.  Treat them as data so that the
+     * method lookup, API-version argument order, and result handling live in one host adapter.
+     */
+    private fun removeManagerRecord(target: Any, request: ManagerRemoval): Boolean {
+        val endpoint = when (request) {
+            is ManagerRemoval.Business -> resolveRemoveBusinessMethod()
+            is ManagerRemoval.Notification -> resolveRemoveNotificationMethod()
+            is ManagerRemoval.Composite -> resolveRemoveCompositeMethod()
         }
-    }
-
-    private fun invokeManagerRemoveComposite(target: Any, compositeKey: String, packageName: String): Boolean {
-        val point = resolveRemoveCompositeMethod()
-        return target.asResolver().firstMethod {
-            name = point.methodName
-            parameterCount = 3
-        }.invoke<Boolean>(1, compositeKey, packageName) == true
+        val member = target.asResolver().firstMethod {
+            name = endpoint.methodName
+            parameterCount = if (request is ManagerRemoval.Business) 2 else 3
+        }
+        val arguments = when (request) {
+            is ManagerRemoval.Business -> arrayOf<Any>(request.packageName, request.business)
+            is ManagerRemoval.Notification -> {
+                if (member.self.parameterTypes.getOrNull(1) == String::class.java) {
+                    arrayOf<Any>(request.notificationId, request.packageName, 1)
+                } else {
+                    arrayOf<Any>(request.notificationId, 1, request.packageName)
+                }
+            }
+            is ManagerRemoval.Composite -> arrayOf<Any>(1, request.compositeKey, request.packageName)
+        }
+        return if (request is ManagerRemoval.Composite) {
+            member.invoke<Boolean>(*arguments) == true
+        } else {
+            member.invoke(*arguments)
+            true
+        }
     }
 
     private fun scheduleSuppressedRuntimeEject(business: String, extras: Bundle) {
@@ -1139,10 +1156,12 @@ class CustomRearCardHook : YukiBaseHooker() {
             .ifBlank { "$TESTER_PACKAGE:$business:$notificationId" }
         Handler(Looper.getMainLooper()).post {
             if (notificationId > 0) {
-                runCatching { invokeManagerRemoveNotification(target, notificationId, TESTER_PACKAGE) }
+                runCatching {
+                    removeManagerRecord(target, ManagerRemoval.Notification(notificationId, TESTER_PACKAGE))
+                }
             }
-            runCatching { invokeManagerRemoveComposite(target, compositeKey, TESTER_PACKAGE) }
-            runCatching { invokeManagerRemoveBusiness(target, TESTER_PACKAGE, business) }
+            runCatching { removeManagerRecord(target, ManagerRemoval.Composite(compositeKey, TESTER_PACKAGE)) }
+            runCatching { removeManagerRecord(target, ManagerRemoval.Business(TESTER_PACKAGE, business)) }
         }
     }
 
@@ -1482,15 +1501,17 @@ class CustomRearCardHook : YukiBaseHooker() {
     private fun extractManagedPath(extras: Bundle): String =
         extras.getString("path") ?: extras.getString("template_path") ?: ""
 
-    private fun extractField(owner: Any?, fieldName: String): Any? {
-        var current: Class<*>? = owner?.javaClass
-        while (current != null && current != Any::class.java) {
-            current.declaredFields.firstOrNull { it.name == fieldName }?.let { field ->
-                return runCatching { field.isAccessible = true; field.get(owner) }.getOrNull()
-            }
-            current = current.superclass
-        }
-        return null
+    private fun readInstanceField(instance: Any?, fieldName: String): Any? {
+        val receiver = instance ?: return null
+        val field = generateSequence(receiver.javaClass) { it.superclass }
+            .takeWhile { it != Any::class.java }
+            .mapNotNull { type -> runCatching { type.getDeclaredField(fieldName) }.getOrNull() }
+            .firstOrNull()
+            ?: return null
+        return runCatching {
+            field.isAccessible = true
+            field.get(receiver)
+        }.getOrNull()
     }
 
     private fun rememberError(business: String, commandId: String, message: String) {
@@ -1507,15 +1528,13 @@ class CustomRearCardHook : YukiBaseHooker() {
 
     private fun sha256(file: File): String {
         val digest = java.security.MessageDigest.getInstance("SHA-256")
-        file.inputStream().use { input ->
-            val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
-            while (true) {
-                val read = input.read(buffer)
-                if (read < 0) break
-                digest.update(buffer, 0, read)
-            }
+        java.security.DigestInputStream(file.inputStream(), digest).use { stream ->
+            val scratch = ByteArray(8 * 1024)
+            while (stream.read(scratch) != -1) Unit
         }
-        return digest.digest().joinToString("") { "%02x".format(it) }
+        return digest.digest().joinToString(separator = "") { byte ->
+            byte.toUByte().toString(radix = 16).padStart(2, '0')
+        }
     }
 
     private fun resolveMethod(key: String, query: HostMethodQuery): HostMethodRef =

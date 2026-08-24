@@ -1,6 +1,6 @@
 # Third-party notices
 
-OuterView itself is MIT licensed. Its distributed APK contains the following
+OuterView itself is licensed under GNU GPL-3.0. Its distributed APK contains the following
 runtime dependency families, all under permissive licenses:
 
 | Component family | Selected license |

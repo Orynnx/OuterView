@@ -23,10 +23,17 @@ jobs:
       - uses: android-actions/setup-android@v3
       - name: Install Android SDK 36
         run: sdkmanager "platforms;android-36" "build-tools;36.0.0"
-      - name: Verify Dino Run package
-        run: python demo/dino-run/build_demo.py --check
+      - name: Verify Hello Card package
+        run: python demo/hello-card/build_card.py --check
+      - name: Audit REAREye source separation
+        run: |
+          git clone --filter=blob:none https://github.com/killerprojecte/REAREye.git .audit/REAREye
+          python tools/audit_reareye_similarity.py --reareye .audit/REAREye
       - name: Test and build
         run: ./gradlew :core:testDebugUnitTest :app:assembleDebug --stacktrace
+      - name: Audit runtime dependency licenses
+        shell: pwsh
+        run: ./tools/verify-runtime-licenses.ps1 -GradleExecutable ./gradlew
       - uses: actions/upload-artifact@v4
         with:
           name: OuterView-debug

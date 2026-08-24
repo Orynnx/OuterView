@@ -87,16 +87,7 @@ object SmartAssistantTemplateValidator {
         return (0 until nodes.length).mapNotNull { nodes.item(it) as? Element }
     }
 
-    fun sha256(file: File): String {
-        val digest = MessageDigest.getInstance("SHA-256")
-        file.inputStream().use { input ->
-            val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
-            while (true) {
-                val read = input.read(buffer)
-                if (read < 0) break
-                digest.update(buffer, 0, read)
-            }
-        }
-        return digest.digest().joinToString("") { "%02x".format(it) }
-    }
+    fun sha256(file: File): String = MessageDigest.getInstance("SHA-256")
+        .digest(file.readBytes())
+        .joinToString(separator = "") { byte -> byte.toUByte().toString(16).padStart(2, '0') }
 }
