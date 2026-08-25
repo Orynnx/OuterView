@@ -647,6 +647,29 @@ class CustomRearCardHook : YukiBaseHooker() {
                             .forEach { finalizePendingDeletion(it.cardId, business) }
                     }
                 }
+                // The user may remove an enabled card from the system rear-screen UI
+                // without going through OuterView.  Adopt that removal as authoritative
+                // so the next synchronizeCards() does not force it back.
+                cards.values.toList().forEach { card ->
+                    if (card.pendingDelete || card.business in suppressedBusinesses) return@forEach
+                    if (runtimePresence(TESTER_PACKAGE, card.business) != RuntimePresence.ABSENT) return@forEach
+                    synchronized(lifecycleLock) {
+                        val current = cards[card.cardId] ?: return@synchronized
+                        if (current.enabled && current.business !in suppressedBusinesses) {
+                            val now = System.currentTimeMillis()
+                            cards[current.cardId] = current.copy(enabled = false, updatedAt = now)
+                            writeRegistry()
+                            evidence[current.business] = (evidence[current.business] ?: RuntimeEvidence()).copy(
+                                liveWidgetContains = false,
+                                runtimeActivated = false,
+                                lastEventAt = now,
+                                lastError = null,
+                            )
+                            dispatchRuntimeEvent(current.business, "runtime_deactivated")
+                            YLog.info("[$TAG] external removal adopted business=${current.business} cardId=${current.cardId}")
+                        }
+                    }
+                }
             } finally {
                 runtimeReconcileScheduled.set(false)
             }

@@ -43,6 +43,9 @@ class RearWallpaperHostHook : YukiBaseHooker() {
     private var hostDex: HostDexResolver? = null
     private var mainPanel: Any? = null
     private var mainHandler: Handler? = null
+    // Last wallpaper the user actually selected, from OuterView or the system panel.
+    // Cleared when a non-managed wallpaper is picked so we never treat an absent id
+    // as "one of ours is still current".
     private var appliedId: Int? = null
     @Volatile private var restoringManagedWallpaper = false
 
@@ -80,9 +83,16 @@ class RearWallpaperHostHook : YukiBaseHooker() {
                     val index = args.getOrNull(1) as? Int ?: return@after
                     val widget = widgets.getOrNull(index) ?: return@after
                     val ids = RearWallpaperRuntimeCodec.decode(runtimeFile().takeIf(File::isFile)?.readText().orEmpty()).mapTo(HashSet()) { it.wallpaperId }
-                    appliedId = intFields(widget).firstOrNull(ids::contains)
-                    YLog.info("[$TAG] MainPanel selected index=$index wallpaperId=$appliedId")
-                    restoreManagedWallpaperAfterHostSelection()
+                    val selectedManagedId = intFields(widget).firstOrNull(ids::contains)
+                    if (selectedManagedId != null) {
+                        appliedId = selectedManagedId
+                        YLog.info("[$TAG] MainPanel selected index=$index managedWallpaperId=$selectedManagedId")
+                        restoreManagedWallpaperAfterHostSelection()
+                    } else {
+                        appliedId = null
+                        clearManagedWallpaperCurrent()
+                        YLog.info("[$TAG] MainPanel selected non-managed wallpaper at index=$index; cleared current marker")
+                    }
                 }
             }.onFailure { YLog.error("[$TAG] selection observer install failed", it) }
         }
@@ -165,10 +175,6 @@ class RearWallpaperHostHook : YukiBaseHooker() {
             YLog.info("[$TAG] apply appended managed widget id=$id size=${widgets.size} index=$index")
         }
         require(index >= 0) { "wallpaper widget is not loaded; reopen rear screen and retry" }
-        // Persist before MainPanel emits its selection callback.  Otherwise that
-        // callback can observe the previously selected managed wallpaper and
-        // schedule a stale restore that immediately overrides this selection.
-        markManagedWallpaperCurrent(id)
         val completed = CountDownLatch(1)
         val failure = AtomicReference<Throwable?>()
         val task = Runnable { runCatching {
@@ -176,6 +182,9 @@ class RearWallpaperHostHook : YukiBaseHooker() {
                 .invoke(widgets, index)
             panel.asResolver().firstMethod { name = saveSelectionPoint().methodName; parameterCount = 0 }.invoke()
             appliedId = id
+            // Persist only after the host accepted the switch; if this throws, the
+            // previous outerviewCurrent marker stays valid for restore-on-reboot.
+            markManagedWallpaperCurrent(id)
             YLog.info("[$TAG] apply dispatched id=$id index=$index")
         }.onFailure { failure.set(it); YLog.error("[$TAG] MainPanel apply failed", it) }.also { completed.countDown() }
         }
@@ -349,7 +358,10 @@ class RearWallpaperHostHook : YukiBaseHooker() {
 
     private fun delete(id: Int): Bundle = runCatching { synchronized(lock) {
         val old = runtimeFile().takeIf(File::isFile)?.readText().orEmpty(); val target = RearWallpaperRuntimeCodec.decode(old).firstOrNull { it.wallpaperId == id } ?: error("wallpaper not found")
-        require(appliedId != id && selectedManagedWallpaperId() != id) {
+        // outerviewCurrent is only our last persisted intent.  The user may have
+        // selected a system wallpaper outside OuterView since then, so deletion
+        // must rely on the host selection observed by this hook instead.
+        require(appliedId != id) {
             "请先应用另一张壁纸，再删除当前壁纸"
         }
         require(ManagedRearWallpaperPaths.isManagedResource(runtimeRoot(), target)) { "refusing to delete non-OuterView wallpaper" }
@@ -401,6 +413,17 @@ class RearWallpaperHostHook : YukiBaseHooker() {
             }
         }
         writeRuntime(array.toString())
+    }
+    private fun clearManagedWallpaperCurrent() {
+        val old = runtimeFile().takeIf(File::isFile)?.readText() ?: return
+        val array = JSONArray(old); var changed = false
+        for (i in 0 until array.length()) {
+            val item = array.optJSONObject(i) ?: continue
+            if (item.optBoolean("outerviewCurrent")) {
+                item.remove("outerviewCurrent"); changed = true
+            }
+        }
+        if (changed) writeRuntime(array.toString())
     }
     private fun restoreManagedWallpaperAfterHostSelection() {
         if (restoringManagedWallpaper) return

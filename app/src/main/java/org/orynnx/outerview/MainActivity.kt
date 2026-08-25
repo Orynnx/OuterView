@@ -333,10 +333,6 @@ private fun AboutApp(active: Boolean) {
                     Column(Modifier.padding(22.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         Text("OuterView", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
                         Text("面向小米背屏的管理工具", style = MaterialTheme.typography.titleMedium)
-                        Text(
-                            "独立实现 · GPL-3.0 · 开发者凛野",
-                            color = MaterialTheme.colorScheme.onPrimaryContainer,
-                        )
                     }
                 }
             }

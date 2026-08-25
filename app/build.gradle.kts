@@ -15,8 +15,8 @@ android {
         applicationId = "org.orynnx.outerview"
         minSdk = 36
         targetSdk = 36
-        versionCode = 9
-        versionName = "2.3.2"
+        versionCode = 10
+        versionName = "2.4.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
