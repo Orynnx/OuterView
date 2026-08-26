@@ -20,6 +20,25 @@ android {
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
+    // The app ships Chinese UI with an English fallback; do not package
+    // unused locale resources from Compose/Miuix dependencies.
+    androidResources {
+        localeFilters += setOf("en", "zh", "zh-rCN")
+    }
+
+    buildTypes {
+        release {
+            // Release artifacts must use the shrinker and resource optimization;
+            // the debug variant is reserved for local/device iteration.
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro",
+            )
+        }
+    }
+
     buildFeatures {
         buildConfig = true
         compose = true
