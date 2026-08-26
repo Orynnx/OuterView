@@ -6,6 +6,8 @@ runtime dependency families, all under permissive licenses:
 | Component family | Selected license |
 | --- | --- |
 | AndroidX, Jetpack Compose, Material Components, Android Gradle generated support | Apache-2.0 |
+| Miuix 0.9.3 and its Compose Multiplatform support | Apache-2.0 |
+| MaterialKolor dynamic color utilities | MIT |
 | Kotlin standard library and kotlinx Coroutines/Serialization | Apache-2.0 |
 | YukiHookAPI 1.3.1 | Apache-2.0 |
 | KavaRef 1.0.2 | Apache-2.0 |

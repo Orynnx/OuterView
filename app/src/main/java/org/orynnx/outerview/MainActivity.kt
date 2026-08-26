@@ -1,5 +1,6 @@
 package org.orynnx.outerview
 
+import android.app.Activity
 import android.os.Bundle
 import android.os.ParcelFileDescriptor
 import android.util.Log
@@ -38,46 +39,38 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.rounded.Add
-import androidx.compose.material.icons.rounded.Delete
-import androidx.compose.material.icons.rounded.DeleteSweep
-import androidx.compose.material.icons.rounded.Edit
-import androidx.compose.material.icons.rounded.Info
-import androidx.compose.material.icons.rounded.Home
-import androidx.compose.material.icons.rounded.MoreVert
-import androidx.compose.material.icons.rounded.Refresh
-import androidx.compose.material.icons.rounded.Replay
-import androidx.compose.material.icons.rounded.WarningAmber
-import androidx.compose.material.icons.rounded.Wallpaper
-import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Button
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.Checkbox
-import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
-import androidx.compose.material3.ExtendedFloatingActionButton
-import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.HorizontalDivider
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.NavigationBar
-import androidx.compose.material3.NavigationBarItem
-import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Scaffold
-import androidx.compose.material3.SnackbarHost
-import androidx.compose.material3.SnackbarHostState
-import androidx.compose.material3.Surface
-import androidx.compose.material3.Switch
-import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
-import androidx.compose.material3.TopAppBar
-import androidx.compose.material3.darkColorScheme
-import androidx.compose.material3.lightColorScheme
+import top.yukonga.miuix.kmp.basic.Button
+import top.yukonga.miuix.kmp.basic.CardDefaults as MiuixCardDefaults
+import top.yukonga.miuix.kmp.basic.CircularProgressIndicator
+import top.yukonga.miuix.kmp.basic.DropdownEntry
+import top.yukonga.miuix.kmp.basic.DropdownItem
+import top.yukonga.miuix.kmp.basic.HorizontalDivider
+import top.yukonga.miuix.kmp.basic.Icon
+import top.yukonga.miuix.kmp.basic.IconButton
+import top.yukonga.miuix.kmp.basic.NavigationBar
+import top.yukonga.miuix.kmp.basic.NavigationBarItem
+import top.yukonga.miuix.kmp.basic.Scaffold
+import top.yukonga.miuix.kmp.basic.SnackbarHost
+import top.yukonga.miuix.kmp.basic.SnackbarHostState
+import top.yukonga.miuix.kmp.basic.Surface
+import top.yukonga.miuix.kmp.basic.Switch
+import top.yukonga.miuix.kmp.basic.Text
+import top.yukonga.miuix.kmp.basic.TopAppBar
+import top.yukonga.miuix.kmp.icon.MiuixIcons
+import top.yukonga.miuix.kmp.icon.extended.Add
+import top.yukonga.miuix.kmp.icon.extended.Delete
+import top.yukonga.miuix.kmp.icon.extended.Edit
+import top.yukonga.miuix.kmp.icon.extended.Home
+import top.yukonga.miuix.kmp.icon.extended.Info
+import top.yukonga.miuix.kmp.icon.extended.More
+import top.yukonga.miuix.kmp.icon.extended.Refresh
+import top.yukonga.miuix.kmp.icon.extended.Redo
+import top.yukonga.miuix.kmp.icon.extended.Report
+import top.yukonga.miuix.kmp.icon.extended.Background
+import top.yukonga.miuix.kmp.menu.OverlayIconDropdownMenu
+import top.yukonga.miuix.kmp.theme.ColorSchemeMode
+import top.yukonga.miuix.kmp.theme.MiuixTheme
+import top.yukonga.miuix.kmp.theme.ThemeController
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -87,6 +80,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -97,6 +91,7 @@ import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalUriHandler
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
@@ -108,6 +103,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
 import androidx.core.content.ContextCompat
+import androidx.core.view.WindowCompat
 import org.orynnx.outerview.core.CardImportPreview
 import org.orynnx.outerview.core.ManagedCardDiagnostics
 import org.orynnx.outerview.core.ManagedRearCard
@@ -216,15 +212,15 @@ private fun OuterViewApp() {
             NavigationBar {
                 MainDestination.entries.forEach { item ->
                     val icon = when (item) {
-                        MainDestination.ASSISTANT -> Icons.Rounded.Home
-                        MainDestination.WALLPAPER -> Icons.Rounded.Wallpaper
-                        MainDestination.ABOUT -> Icons.Rounded.Info
+                        MainDestination.ASSISTANT -> MiuixIcons.Home
+                        MainDestination.WALLPAPER -> MiuixIcons.Background
+                        MainDestination.ABOUT -> MiuixIcons.Info
                     }
                     NavigationBarItem(
                         selected = destination == item,
                         onClick = { destination = item },
-                        icon = { Icon(icon, contentDescription = null) },
-                        label = { Text(item.label) },
+                        icon = icon,
+                        label = item.label,
                     )
                 }
             }
@@ -289,7 +285,6 @@ private fun OuterViewApp() {
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun AboutApp(active: Boolean) {
     val uriHandler = LocalUriHandler.current
@@ -318,7 +313,7 @@ private fun AboutApp(active: Boolean) {
             checkUpdate()
         }
     }
-    Scaffold(topBar = { TopAppBar(title = { Text("关于", fontWeight = FontWeight.SemiBold) }) }) { padding ->
+    Scaffold(topBar = { TopAppBar(title = "关于") }) { padding ->
         LazyColumn(
             modifier = Modifier.fillMaxSize().padding(padding),
             contentPadding = PaddingValues(horizontal = 20.dp, vertical = 16.dp),
@@ -327,24 +322,25 @@ private fun AboutApp(active: Boolean) {
             item {
                 Surface(
                     shape = RoundedCornerShape(24.dp),
-                    color = MaterialTheme.colorScheme.primaryContainer,
+                    color = MiuixTheme.colorScheme.primaryContainer,
+                    contentColor = MiuixTheme.colorScheme.onPrimaryContainer,
                     modifier = Modifier.fillMaxWidth(),
                 ) {
                     Column(Modifier.padding(22.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Text("OuterView", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
-                        Text("面向小米背屏的管理工具", style = MaterialTheme.typography.titleMedium)
+                        Text("OuterView", style = MiuixTheme.textStyles.title1, fontWeight = FontWeight.Bold)
+                        Text("面向小米背屏的管理工具", style = MiuixTheme.textStyles.title2)
                     }
                 }
             }
             item {
                 Card(
                     onClick = { uriHandler.openUri("https://github.com/Orynnx/OuterView") },
-                    shape = RoundedCornerShape(20.dp),
+                    cornerRadius = 20.dp,
                     modifier = Modifier.fillMaxWidth(),
                 ) {
                     Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
                         Text("开源项目主页", fontWeight = FontWeight.SemiBold)
-                        Text("github.com/Orynnx/OuterView", color = MaterialTheme.colorScheme.primary)
+                        Text("github.com/Orynnx/OuterView", color = MiuixTheme.colorScheme.primary)
                     }
                 }
             }
@@ -353,23 +349,23 @@ private fun AboutApp(active: Boolean) {
                     Text("版本 ${BuildConfig.VERSION_NAME}", fontWeight = FontWeight.Medium)
                     Text(
                         "统一管理助手卡片、背屏壁纸及其显示设置。",
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
                     )
                 }
             }
             item { HorizontalDivider() }
-            item { Text("应用更新", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold) }
+            item { Text("应用更新", style = MiuixTheme.textStyles.title2, fontWeight = FontWeight.SemiBold) }
             if (checkingUpdate) {
                 item {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
                         Spacer(Modifier.width(10.dp))
-                        Text("正在检查新版本…", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Text("正在检查新版本…", color = MiuixTheme.colorScheme.onSurfaceVariantSummary)
                     }
                 }
             } else update?.let { release ->
                 item {
-                    Card(shape = RoundedCornerShape(20.dp), modifier = Modifier.fillMaxWidth()) {
+                    Card(cornerRadius = 20.dp, modifier = Modifier.fillMaxWidth()) {
                         Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                             Text("发现 OuterView ${release.version}", fontWeight = FontWeight.SemiBold)
                             if (release.notes.isNotBlank()) {
@@ -418,8 +414,8 @@ private fun AboutApp(active: Boolean) {
                     Text(
                         message,
                         color = if (message.contains("无法") || message.contains("失败")) {
-                            MaterialTheme.colorScheme.error
-                        } else MaterialTheme.colorScheme.onSurfaceVariant,
+                            MiuixTheme.colorScheme.error
+                        } else MiuixTheme.colorScheme.onSurfaceVariantSummary,
                     )
                 }
             }
@@ -428,7 +424,6 @@ private fun AboutApp(active: Boolean) {
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun FunCardManagerApp(active: Boolean) {
     val context = LocalContext.current
@@ -608,31 +603,19 @@ private fun FunCardManagerApp(active: Boolean) {
     Scaffold(
         topBar = {
             TopAppBar(
-                title = {
-                    Column {
-                        Text("助手卡片", fontWeight = FontWeight.SemiBold)
-                        Text(
-                            when {
-                                initialLoading -> "正在连接背屏服务…"
-                                serviceReady -> "背屏服务已连接"
-                                capabilities.compatible -> "正在等待背屏服务…"
-                                else -> "背屏服务未就绪"
-                            },
-                            style = MaterialTheme.typography.labelMedium,
-                            color = if (serviceReady) {
-                                MaterialTheme.colorScheme.primary
-                            } else {
-                                MaterialTheme.colorScheme.error
-                            },
-                        )
-                    }
+                title = "助手卡片",
+                subtitle = when {
+                    initialLoading -> "正在连接背屏服务…"
+                    serviceReady -> "背屏服务已连接"
+                    capabilities.compatible -> "正在等待背屏服务…"
+                    else -> "背屏服务未就绪"
                 },
                 actions = {
                     IconButton(
                         onClick = { deleteAllRequested = true },
                         enabled = cards.isNotEmpty() && workingKey == null && !refreshing,
                     ) {
-                        Icon(Icons.Rounded.DeleteSweep, contentDescription = "删除全部卡片")
+                        Icon(MiuixIcons.Delete, contentDescription = "删除全部卡片")
                     }
                     IconButton(
                         onClick = { scope.launch { refresh(manual = true) } },
@@ -646,7 +629,7 @@ private fun FunCardManagerApp(active: Boolean) {
                                 strokeWidth = 2.dp,
                             )
                         } else {
-                            Icon(Icons.Rounded.Refresh, contentDescription = "刷新助手卡片")
+                            Icon(MiuixIcons.Refresh, contentDescription = "刷新助手卡片")
                         }
                     }
                 },
@@ -660,11 +643,12 @@ private fun FunCardManagerApp(active: Boolean) {
                     replacementTarget = null
                     fileLauncher.launch(arrayOf("application/zip", "application/octet-stream", "*/*"))
                 },
+                enabled = workingKey == null && !refreshing,
                 modifier = Modifier.semantics {
                     contentDescription = "导入助手卡片"
                     if (workingKey != null || refreshing) disabled()
                 },
-                icon = { Icon(Icons.Rounded.Add, contentDescription = null) },
+                icon = { Icon(MiuixIcons.Add, contentDescription = null) },
                 text = { Text("导入卡片") },
                 expanded = workingKey == null && !refreshing,
             )
@@ -678,7 +662,8 @@ private fun FunCardManagerApp(active: Boolean) {
             workingMessage?.let { message ->
                 item {
                     Surface(
-                        color = MaterialTheme.colorScheme.secondaryContainer,
+                        color = MiuixTheme.colorScheme.secondaryContainer,
+                        contentColor = MiuixTheme.colorScheme.onSecondaryContainer,
                         shape = RoundedCornerShape(16.dp),
                         modifier = Modifier.fillMaxWidth(),
                     ) {
@@ -688,7 +673,7 @@ private fun FunCardManagerApp(active: Boolean) {
                         ) {
                             CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
                             Spacer(Modifier.width(10.dp))
-                            Text(message, style = MaterialTheme.typography.bodyMedium)
+                            Text(message, style = MiuixTheme.textStyles.body2)
                         }
                     }
                 }
@@ -777,7 +762,7 @@ private fun FunCardManagerApp(active: Boolean) {
                         runAction(card.cardId, "正在删除 ${card.displayName}，请等待背屏清理完成") {
                             manager.deleteCard(card.cardId)
                         }
-                    }) { Text("删除", color = MaterialTheme.colorScheme.error) }
+                    }) { Text("删除", color = MiuixTheme.colorScheme.error) }
                 },
                 dismissButton = { TextButton(onClick = { deleteTarget = null }) { Text("取消") } },
             )
@@ -794,7 +779,7 @@ private fun FunCardManagerApp(active: Boolean) {
                         runAction("delete_all", "正在删除全部卡片，请等待宿主和背屏清理完成") {
                             manager.deleteAllCards()
                         }
-                    }) { Text("全部删除", color = MaterialTheme.colorScheme.error) }
+                    }) { Text("全部删除", color = MiuixTheme.colorScheme.error) }
                 },
                 dismissButton = {
                     TextButton(onClick = { deleteAllRequested = false }) { Text("取消") }
@@ -828,20 +813,20 @@ private fun HookWarningBanner(
     onRetry: () -> Unit,
 ) {
     Surface(
-        color = MaterialTheme.colorScheme.errorContainer,
-        contentColor = MaterialTheme.colorScheme.onErrorContainer,
+        color = MiuixTheme.colorScheme.errorContainer,
+        contentColor = MiuixTheme.colorScheme.onErrorContainer,
         shape = RoundedCornerShape(18.dp),
         modifier = Modifier.fillMaxWidth(),
     ) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(Icons.Rounded.WarningAmber, contentDescription = null, Modifier.size(22.dp))
+                Icon(MiuixIcons.Report, contentDescription = null, Modifier.size(22.dp))
                 Spacer(Modifier.width(10.dp))
                 Text("背屏服务未就绪", fontWeight = FontWeight.SemiBold)
             }
             Text(
                 message ?: "请确认 LSPosed 中已启用 OuterView，并重启小米背屏中心后重试。",
-                style = MaterialTheme.typography.bodySmall,
+                style = MiuixTheme.textStyles.footnote2,
             )
             OutlinedButton(onClick = onRetry, enabled = !retrying) {
                 if (retrying) {
@@ -862,7 +847,7 @@ private fun LoadingCards() {
         verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
         CircularProgressIndicator()
-        Text("正在读取助手卡片…", color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text("正在读取助手卡片…", color = MiuixTheme.colorScheme.onSurfaceVariantSummary)
     }
 }
 
@@ -871,19 +856,20 @@ private fun EmptyCards(onImport: () -> Unit) {
     Surface(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(24.dp),
-        color = MaterialTheme.colorScheme.surfaceContainer,
+        color = MiuixTheme.colorScheme.surfaceContainer,
+        contentColor = MiuixTheme.colorScheme.onSurfaceContainer,
     ) {
         Column(
             modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 48.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            Icon(Icons.Rounded.Add, contentDescription = null, Modifier.size(40.dp), tint = MaterialTheme.colorScheme.primary)
-            Text("还没有助手卡片", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+            Icon(MiuixIcons.Add, contentDescription = null, Modifier.size(40.dp), tint = MiuixTheme.colorScheme.primary)
+            Text("还没有助手卡片", style = MiuixTheme.textStyles.title2, fontWeight = FontWeight.SemiBold)
             Text(
                 "导入可信的 MAML ZIP 卡片，即可在小米背屏上显示。",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                style = MiuixTheme.textStyles.body2,
+                color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
             )
             Button(onClick = onImport) { Text("选择卡片文件") }
         }
@@ -907,11 +893,9 @@ private fun CompactCardRow(
         card.state == RearCardState.INSTALLED_DISABLED ||
         card.state == RearCardState.INSTALLED_ENABLED
     val hasError = card.state == RearCardState.ERROR
-    var menuExpanded by remember(card.cardId) { mutableStateOf(false) }
-
     Card(
-        shape = RoundedCornerShape(20.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer),
+        cornerRadius = 20.dp,
+        colors = CardDefaults.cardColors(containerColor = MiuixTheme.colorScheme.surfaceContainer),
         modifier = Modifier.fillMaxWidth().animateContentSize(),
     ) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -919,7 +903,7 @@ private fun CompactCardRow(
                 Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(7.dp)) {
                     Text(
                         card.displayName,
-                        style = MaterialTheme.typography.titleMedium,
+                        style = MiuixTheme.textStyles.title2,
                         fontWeight = FontWeight.SemiBold,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
@@ -934,42 +918,45 @@ private fun CompactCardRow(
                         strokeWidth = 2.dp,
                     )
                 } else {
-                    Box {
-                        IconButton(onClick = { menuExpanded = true }, enabled = enabled) {
-                            Icon(Icons.Rounded.MoreVert, contentDescription = "管理 ${card.displayName}")
-                        }
-                        DropdownMenu(
-                            expanded = menuExpanded,
-                            onDismissRequest = { menuExpanded = false },
-                        ) {
-                            DropdownMenuItem(
-                                text = { Text("替换模板") },
-                                leadingIcon = { Icon(Icons.Rounded.Edit, null) },
-                                enabled = enabled,
-                                onClick = { menuExpanded = false; onReplace() },
-                            )
-                            DropdownMenuItem(
-                                text = { Text("参数设置") },
-                                leadingIcon = { Icon(Icons.Rounded.Edit, null) },
-                                enabled = enabled && !desiredVisible,
-                                onClick = { menuExpanded = false; onPayload() },
-                            )
-                            DropdownMenuItem(
-                                text = { Text("诊断") },
-                                leadingIcon = { Icon(Icons.Rounded.Info, null) },
-                                enabled = enabled,
-                                onClick = { menuExpanded = false; onDiagnostics() },
-                            )
-                            HorizontalDivider()
-                            DropdownMenuItem(
-                                text = { Text("删除", color = MaterialTheme.colorScheme.error) },
-                                leadingIcon = {
-                                    Icon(Icons.Rounded.Delete, null, tint = MaterialTheme.colorScheme.error)
-                                },
-                                enabled = enabled,
-                                onClick = { menuExpanded = false; onDelete() },
-                            )
-                        }
+                    OverlayIconDropdownMenu(
+                        entries = listOf(
+                            DropdownEntry(
+                                items = listOf(
+                                    DropdownItem(
+                                        text = "替换模板",
+                                        enabled = enabled,
+                                        onClick = onReplace,
+                                        icon = { modifier -> Icon(MiuixIcons.Edit, null, modifier) },
+                                    ),
+                                    DropdownItem(
+                                        text = "参数设置",
+                                        enabled = enabled && !desiredVisible,
+                                        onClick = onPayload,
+                                        icon = { modifier -> Icon(MiuixIcons.Edit, null, modifier) },
+                                    ),
+                                    DropdownItem(
+                                        text = "诊断",
+                                        enabled = enabled,
+                                        onClick = onDiagnostics,
+                                        icon = { modifier -> Icon(MiuixIcons.Info, null, modifier) },
+                                    ),
+                                ),
+                            ),
+                            DropdownEntry(
+                                items = listOf(
+                                    DropdownItem(
+                                        text = "删除",
+                                        enabled = enabled,
+                                        onClick = onDelete,
+                                        icon = { modifier -> Icon(MiuixIcons.Delete, null, modifier) },
+                                    ),
+                                ),
+                            ),
+                        ),
+                        enabled = enabled,
+                        collapseOnSelection = true,
+                    ) {
+                        Icon(MiuixIcons.More, contentDescription = "管理 ${card.displayName}")
                     }
                 }
             }
@@ -996,11 +983,11 @@ private fun CompactCardRow(
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                        Text("显示到背屏", style = MaterialTheme.typography.bodyLarge)
+                        Text("显示到背屏", style = MiuixTheme.textStyles.body1)
                         Text(
                             if (desiredVisible) "卡片将在背屏可用时显示" else "保留卡片，但不在背屏显示",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            style = MiuixTheme.textStyles.footnote2,
+                            color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
                         )
                     }
                     Switch(
@@ -1014,8 +1001,8 @@ private fun CompactCardRow(
 
             if (hasError) {
                 Surface(
-                    color = MaterialTheme.colorScheme.errorContainer,
-                    contentColor = MaterialTheme.colorScheme.onErrorContainer,
+                    color = MiuixTheme.colorScheme.errorContainer,
+                    contentColor = MiuixTheme.colorScheme.onErrorContainer,
                     shape = RoundedCornerShape(14.dp),
                     modifier = Modifier.fillMaxWidth(),
                 ) {
@@ -1025,11 +1012,11 @@ private fun CompactCardRow(
                     ) {
                         Text(
                             card.lastMessage.orEmpty().ifBlank { "上次操作未完成，请重试。" },
-                            style = MaterialTheme.typography.bodySmall,
+                            style = MiuixTheme.textStyles.footnote2,
                         )
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             TextButton(onClick = onRetry, enabled = enabled) {
-                                Icon(Icons.Rounded.Replay, null, Modifier.size(18.dp))
+                                Icon(MiuixIcons.Redo, null, Modifier.size(18.dp))
                                 Spacer(Modifier.width(4.dp))
                                 Text(
                                     when {
@@ -1050,13 +1037,13 @@ private fun CompactCardRow(
                     Text(
                         card.lastMessage.orEmpty().ifBlank { "卡片尚未安装" },
                         modifier = Modifier.weight(1f),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        style = MiuixTheme.textStyles.footnote2,
+                        color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
                         maxLines = 2,
                         overflow = TextOverflow.Ellipsis,
                     )
                     TextButton(onClick = onRetry, enabled = enabled) {
-                        Icon(Icons.Rounded.Replay, null, Modifier.size(18.dp))
+                        Icon(MiuixIcons.Redo, null, Modifier.size(18.dp))
                         Spacer(Modifier.width(4.dp))
                         Text("重试")
                     }
@@ -1068,19 +1055,48 @@ private fun CompactCardRow(
 
 @Composable
 private fun CardStatusPill(card: ManagedRearCard, working: Boolean) {
-    val color = if (working) MaterialTheme.colorScheme.secondary else statusColor(card)
+    val colors = statusPillColors(card, working)
     Surface(
-        color = color.copy(alpha = 0.13f),
-        contentColor = color,
+        color = colors.container,
+        contentColor = colors.content,
         shape = RoundedCornerShape(50),
     ) {
         Text(
             if (working) "正在处理…" else userStatus(card),
             modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
-            style = MaterialTheme.typography.labelMedium,
+            style = MiuixTheme.textStyles.footnote1,
             fontWeight = FontWeight.Medium,
         )
     }
+}
+
+private data class StatusPillColors(
+    val container: Color,
+    val content: Color,
+)
+
+@Composable
+private fun statusPillColors(card: ManagedRearCard, working: Boolean): StatusPillColors = when {
+    working -> StatusPillColors(
+        container = MiuixTheme.colorScheme.secondaryContainer,
+        content = MiuixTheme.colorScheme.onSecondaryContainer,
+    )
+    card.cleanupPending -> StatusPillColors(
+        container = MiuixTheme.colorScheme.tertiaryContainer,
+        content = MiuixTheme.colorScheme.onTertiaryContainer,
+    )
+    card.desiredEnabled && card.state == RearCardState.INSTALLED_ENABLED -> StatusPillColors(
+        container = MiuixTheme.colorScheme.primaryContainer,
+        content = MiuixTheme.colorScheme.onPrimaryContainer,
+    )
+    card.state == RearCardState.ERROR -> StatusPillColors(
+        container = MiuixTheme.colorScheme.errorContainer,
+        content = MiuixTheme.colorScheme.onErrorContainer,
+    )
+    else -> StatusPillColors(
+        container = MiuixTheme.colorScheme.surfaceContainerHigh,
+        content = MiuixTheme.colorScheme.onSurfaceContainerHigh,
+    )
 }
 
 private fun userStatus(card: ManagedRearCard): String = when {
@@ -1092,14 +1108,6 @@ private fun userStatus(card: ManagedRearCard): String = when {
     card.state == RearCardState.INSTALLED_DISABLED -> "已隐藏"
     card.state == RearCardState.ERROR -> "需要处理"
     else -> "尚未安装"
-}
-
-@Composable
-private fun statusColor(card: ManagedRearCard): Color = when {
-    card.cleanupPending -> MaterialTheme.colorScheme.tertiary
-    card.desiredEnabled && card.state == RearCardState.INSTALLED_ENABLED -> MaterialTheme.colorScheme.primary
-    card.state == RearCardState.ERROR -> MaterialTheme.colorScheme.error
-    else -> MaterialTheme.colorScheme.onSurfaceVariant
 }
 
 @Composable
@@ -1117,7 +1125,7 @@ private fun RiskConfirmDialog(
                 modifier = Modifier.verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
-                Text(preview.suggestedName, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+                Text(preview.suggestedName, style = MiuixTheme.textStyles.headline2, fontWeight = FontWeight.SemiBold)
                 Text(
                     listOfNotNull(
                         preview.author?.takeIf { it.isNotBlank() }?.let { "作者 $it" },
@@ -1125,32 +1133,32 @@ private fun RiskConfirmDialog(
                         "${preview.entryCount} 个文件",
                         formatFileSize(preview.compressedBytes),
                     ).joinToString(" · "),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    style = MiuixTheme.textStyles.footnote2,
+                    color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
                 )
                 Surface(
-                    color = MaterialTheme.colorScheme.errorContainer,
-                    contentColor = MaterialTheme.colorScheme.onErrorContainer,
+                    color = MiuixTheme.colorScheme.errorContainer,
+                    contentColor = MiuixTheme.colorScheme.onErrorContainer,
                     shape = RoundedCornerShape(14.dp),
                 ) {
                     Text(
                         "此卡片包含可调用外部功能的命令。请仅导入来源可信、内容已确认的文件。",
                         modifier = Modifier.padding(12.dp),
-                        style = MaterialTheme.typography.bodySmall,
+                        style = MiuixTheme.textStyles.footnote2,
                     )
                 }
                 preview.findings.take(8).forEach { finding ->
                     Text(
                         "${finding.type}: ${finding.detail}",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.error,
+                        style = MiuixTheme.textStyles.footnote2,
+                        color = MiuixTheme.colorScheme.error,
                     )
                 }
                 if (preview.findings.size > 8) {
                     Text(
                         "另有 ${preview.findings.size - 8} 项未显示",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        style = MiuixTheme.textStyles.footnote2,
+                        color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
                     )
                 }
             }
@@ -1186,8 +1194,8 @@ private fun PayloadEditorDialog(
                         Text("高级模式")
                         Text(
                             "仅供调试或兼容特殊模板",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            style = MiuixTheme.textStyles.footnote2,
+                            color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
                         )
                     }
                 }
@@ -1195,14 +1203,14 @@ private fun PayloadEditorDialog(
                     OutlinedTextField(
                         rear,
                         { rear = it },
-                        label = { Text("背屏参数（miui.rear.param）") },
+                        label = "背屏参数（miui.rear.param）",
                         minLines = 4,
                         modifier = Modifier.fillMaxWidth(),
                     )
                     OutlinedTextField(
                         focus,
                         { focus = it },
-                        label = { Text("焦点参数（miui.focus.param）") },
+                        label = "焦点参数（miui.focus.param）",
                         minLines = 4,
                         modifier = Modifier.fillMaxWidth(),
                     )
@@ -1210,7 +1218,7 @@ private fun PayloadEditorDialog(
                     OutlinedTextField(
                         config,
                         { config = it },
-                        label = { Text("卡片配置（maml_config）") },
+                        label = "卡片配置（maml_config）",
                         minLines = 8,
                         modifier = Modifier.fillMaxWidth(),
                     )
@@ -1260,11 +1268,11 @@ private fun DiagnosticsDialog(value: ManagedCardDiagnostics, onDismiss: () -> Un
 @Composable
 private fun DiagnosticLine(label: String, value: String) {
     Row(Modifier.fillMaxWidth()) {
-        Text(label, Modifier.width(104.dp), style = MaterialTheme.typography.bodySmall)
+        Text(label, Modifier.width(104.dp), style = MiuixTheme.textStyles.footnote2)
         Text(
             value,
             Modifier.weight(1f),
-            style = MaterialTheme.typography.bodySmall,
+            style = MiuixTheme.textStyles.footnote2,
             maxLines = 3,
             overflow = TextOverflow.Ellipsis,
         )
@@ -1281,26 +1289,15 @@ private fun formatFileSize(bytes: Long): String = when {
 
 @Composable
 private fun FunCardManagerTheme(content: @Composable () -> Unit) {
-    val colorScheme = if (isSystemInDarkTheme()) {
-        darkColorScheme(
-            primary = Color(0xFF81D5C2),
-            secondary = Color(0xFFB4CCC5),
-            tertiary = Color(0xFFE6C36D),
-            background = Color(0xFF101412),
-            surface = Color(0xFF101412),
-            surfaceContainer = Color(0xFF1C211F),
-        )
-    } else {
-        lightColorScheme(
-            primary = Color(0xFF176B5C),
-            secondary = Color(0xFF52645F),
-            tertiary = Color(0xFF765A1B),
-            surface = Color(0xFFFFF9FD),
-            surfaceContainer = Color(0xFFF3EDF1),
-        )
+    val controller = remember { ThemeController(ColorSchemeMode.System) }
+    val view = LocalView.current
+    val dark = isSystemInDarkTheme()
+    SideEffect {
+        val window = (view.context as? Activity)?.window ?: return@SideEffect
+        WindowCompat.getInsetsController(window, view).apply {
+            isAppearanceLightStatusBars = !dark
+            isAppearanceLightNavigationBars = !dark
+        }
     }
-    MaterialTheme(
-        colorScheme = colorScheme,
-        content = content,
-    )
+    MiuixTheme(controller = controller, content = content)
 }

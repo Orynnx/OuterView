@@ -17,37 +17,30 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.rounded.Add
-import androidx.compose.material.icons.rounded.CheckCircle
-import androidx.compose.material.icons.rounded.Delete
-import androidx.compose.material.icons.rounded.Edit
-import androidx.compose.material.icons.rounded.ErrorOutline
-import androidx.compose.material.icons.rounded.MoreVert
-import androidx.compose.material.icons.rounded.Refresh
-import androidx.compose.material.icons.rounded.Wallpaper
-import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
-import androidx.compose.material3.ElevatedCard
-import androidx.compose.material3.ExtendedFloatingActionButton
-import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FilledTonalButton
-import androidx.compose.material3.HorizontalDivider
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Scaffold
-import androidx.compose.material3.SnackbarHost
-import androidx.compose.material3.SnackbarHostState
-import androidx.compose.material3.Surface
-import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
-import androidx.compose.material3.TopAppBar
+import androidx.compose.foundation.shape.RoundedCornerShape
+import top.yukonga.miuix.kmp.basic.CircularProgressIndicator
+import top.yukonga.miuix.kmp.basic.DropdownEntry
+import top.yukonga.miuix.kmp.basic.DropdownItem
+import top.yukonga.miuix.kmp.basic.HorizontalDivider
+import top.yukonga.miuix.kmp.basic.Icon
+import top.yukonga.miuix.kmp.basic.IconButton
+import top.yukonga.miuix.kmp.basic.Scaffold
+import top.yukonga.miuix.kmp.basic.SnackbarHost
+import top.yukonga.miuix.kmp.basic.SnackbarHostState
+import top.yukonga.miuix.kmp.basic.Surface
+import top.yukonga.miuix.kmp.basic.TopAppBar
+import top.yukonga.miuix.kmp.basic.Text
+import top.yukonga.miuix.kmp.icon.MiuixIcons
+import top.yukonga.miuix.kmp.icon.extended.Add
+import top.yukonga.miuix.kmp.icon.extended.Delete
+import top.yukonga.miuix.kmp.icon.extended.Edit
+import top.yukonga.miuix.kmp.icon.extended.More
+import top.yukonga.miuix.kmp.icon.extended.Ok
+import top.yukonga.miuix.kmp.icon.extended.Refresh
+import top.yukonga.miuix.kmp.icon.extended.Report
+import top.yukonga.miuix.kmp.icon.extended.Background
+import top.yukonga.miuix.kmp.menu.OverlayIconDropdownMenu
+import top.yukonga.miuix.kmp.theme.MiuixTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -74,7 +67,6 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun RearWallpaperManagerApp(active: Boolean = true) {
     val context = LocalContext.current
@@ -96,8 +88,10 @@ fun RearWallpaperManagerApp(active: Boolean = true) {
 
     fun showMessage(message: String) {
         if (message.isBlank()) return
-        snackbar.currentSnackbarData?.dismiss()
-        scope.launch { snackbar.showSnackbar(message) }
+        scope.launch {
+            snackbar.newestSnackbarData()?.dismiss()
+            snackbar.showSnackbar(message)
+        }
     }
 
     suspend fun refresh(userInitiated: Boolean = false) {
@@ -206,7 +200,7 @@ fun RearWallpaperManagerApp(active: Boolean = true) {
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("背屏壁纸", fontWeight = FontWeight.SemiBold) },
+                title = "背屏壁纸",
                 actions = {
                     IconButton(
                         onClick = { scope.launch { refresh(userInitiated = true) } },
@@ -220,7 +214,7 @@ fun RearWallpaperManagerApp(active: Boolean = true) {
                                 strokeWidth = 2.dp,
                             )
                         } else {
-                            Icon(Icons.Rounded.Refresh, contentDescription = "刷新壁纸列表")
+                            Icon(MiuixIcons.Refresh, contentDescription = "刷新壁纸列表")
                         }
                     }
                 },
@@ -230,6 +224,7 @@ fun RearWallpaperManagerApp(active: Boolean = true) {
         floatingActionButton = {
             ExtendedFloatingActionButton(
                 onClick = openPicker,
+                enabled = controlsEnabled,
                 modifier = Modifier.semantics {
                     if (!controlsEnabled) disabled()
                 },
@@ -242,20 +237,12 @@ fun RearWallpaperManagerApp(active: Boolean = true) {
                             strokeWidth = 2.dp,
                         )
                     } else {
-                        Icon(Icons.Rounded.Add, contentDescription = null)
+                        Icon(MiuixIcons.Add, contentDescription = null)
                     }
                 },
                 text = { Text(if (busy && activeActionId == null) "正在导入…" else "导入壁纸") },
-                containerColor = if (controlsEnabled) {
-                    MaterialTheme.colorScheme.primaryContainer
-                } else {
-                    MaterialTheme.colorScheme.surfaceVariant
-                },
-                contentColor = if (controlsEnabled) {
-                    MaterialTheme.colorScheme.onPrimaryContainer
-                } else {
-                    MaterialTheme.colorScheme.onSurfaceVariant
-                },
+                containerColor = MiuixTheme.colorScheme.primaryContainer,
+                contentColor = MiuixTheme.colorScheme.onPrimaryContainer,
             )
         },
     ) { padding ->
@@ -277,8 +264,8 @@ fun RearWallpaperManagerApp(active: Boolean = true) {
                     )
                     Text(
                         text = "正在读取壁纸…",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        style = MiuixTheme.textStyles.body2,
+                        color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
                     )
                 }
             }
@@ -293,8 +280,8 @@ fun RearWallpaperManagerApp(active: Boolean = true) {
                 item {
                     Text(
                         text = "只显示并管理由 OuterView 导入的壁纸；系统和其他应用的壁纸不会出现在这里。",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        style = MiuixTheme.textStyles.footnote2,
+                        color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
                     )
                 }
 
@@ -346,7 +333,7 @@ fun RearWallpaperManagerApp(active: Boolean = true) {
             val canSave = normalizedName.isNotEmpty() && normalizedName != item.name && !busy
             AlertDialog(
             onDismissRequest = { if (!busy) renameTarget = null },
-            icon = { Icon(Icons.Rounded.Edit, contentDescription = null) },
+            icon = { Icon(MiuixIcons.Edit, contentDescription = null) },
             title = { Text("重命名壁纸") },
             text = {
                 OutlinedTextField(
@@ -354,7 +341,7 @@ fun RearWallpaperManagerApp(active: Boolean = true) {
                     onValueChange = { renameName = it.take(48) },
                     modifier = Modifier.fillMaxWidth(),
                     singleLine = true,
-                    label = { Text("名称") },
+                    label = "名称",
                     supportingText = {
                         Text(if (renameName.isBlank()) "名称不能为空" else "${renameName.length}/48")
                     },
@@ -387,9 +374,9 @@ fun RearWallpaperManagerApp(active: Boolean = true) {
             onDismissRequest = { if (!busy) deleteTarget = null },
             icon = {
                 Icon(
-                    Icons.Rounded.ErrorOutline,
+                    MiuixIcons.Report,
                     contentDescription = null,
-                    tint = MaterialTheme.colorScheme.error,
+                    tint = MiuixTheme.colorScheme.error,
                 )
             },
             title = { Text("删除“${item.name}”？") },
@@ -411,7 +398,7 @@ fun RearWallpaperManagerApp(active: Boolean = true) {
                         }
                     },
                     enabled = !busy,
-                    colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error),
+                    colors = ButtonDefaults.textButtonColors(contentColor = MiuixTheme.colorScheme.error),
                 ) {
                     Text("删除")
                 }
@@ -435,16 +422,20 @@ private fun WallpaperCard(
     onRename: () -> Unit,
     onDelete: () -> Unit,
 ) {
-    var menuExpanded by remember(item.wallpaperId) { mutableStateOf(false) }
     val cardColor = if (item.current) {
-        MaterialTheme.colorScheme.primaryContainer
+        MiuixTheme.colorScheme.primaryContainer
     } else {
-        MaterialTheme.colorScheme.surfaceContainerLow
+        MiuixTheme.colorScheme.surfaceContainer
     }
     val cardContentColor = if (item.current) {
-        MaterialTheme.colorScheme.onPrimaryContainer
+        MiuixTheme.colorScheme.onPrimaryContainer
     } else {
-        MaterialTheme.colorScheme.onSurface
+        MiuixTheme.colorScheme.onSurfaceContainer
+    }
+    val cardSummaryColor = if (item.current) {
+        cardContentColor.copy(alpha = 0.72f)
+    } else {
+        MiuixTheme.colorScheme.onSurfaceVariantSummary
     }
 
     ElevatedCard(
@@ -466,20 +457,20 @@ private fun WallpaperCard(
             ) {
                 Surface(
                     modifier = Modifier.size(48.dp),
-                    shape = MaterialTheme.shapes.medium,
+                    shape = RoundedCornerShape(16.dp),
                     color = if (item.current) {
-                        MaterialTheme.colorScheme.primary
+                        MiuixTheme.colorScheme.primary
                     } else {
-                        MaterialTheme.colorScheme.secondaryContainer
+                        MiuixTheme.colorScheme.secondaryContainer
                     },
                     contentColor = if (item.current) {
-                        MaterialTheme.colorScheme.onPrimary
+                        MiuixTheme.colorScheme.onPrimary
                     } else {
-                        MaterialTheme.colorScheme.onSecondaryContainer
+                        MiuixTheme.colorScheme.onSecondaryContainer
                     },
                 ) {
                     Box(contentAlignment = Alignment.Center) {
-                        Icon(Icons.Rounded.Wallpaper, contentDescription = null)
+                        Icon(MiuixIcons.Background, contentDescription = null)
                     }
                 }
 
@@ -489,70 +480,52 @@ private fun WallpaperCard(
                 ) {
                     Text(
                         text = item.name,
-                        style = MaterialTheme.typography.titleMedium,
+                        style = MiuixTheme.textStyles.title2,
                         fontWeight = FontWeight.SemiBold,
                         maxLines = 2,
                         overflow = TextOverflow.Ellipsis,
                     )
                     Text(
                         text = "由 OuterView 管理",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = cardContentColor.copy(alpha = 0.72f),
+                        style = MiuixTheme.textStyles.footnote2,
+                        color = cardSummaryColor,
                     )
                 }
 
-                Box {
-                    IconButton(
-                        onClick = { menuExpanded = true },
-                        enabled = enabled,
-                    ) {
-                        Icon(
-                            Icons.Rounded.MoreVert,
-                            contentDescription = "管理 ${item.name}",
-                        )
-                    }
-                    DropdownMenu(
-                        expanded = menuExpanded,
-                        onDismissRequest = { menuExpanded = false },
-                    ) {
-                        DropdownMenuItem(
-                            text = { Text("重命名") },
-                            onClick = {
-                                menuExpanded = false
-                                onRename()
-                            },
-                            enabled = enabled,
-                            leadingIcon = { Icon(Icons.Rounded.Edit, contentDescription = null) },
-                        )
-                        DropdownMenuItem(
-                            text = {
-                                Text(
-                                    if (item.current) "正在使用，无法删除" else "删除",
-                                    color = if (item.current) {
-                                        MaterialTheme.colorScheme.onSurfaceVariant
-                                    } else {
-                                        MaterialTheme.colorScheme.error
-                                    },
-                                )
-                            },
-                            onClick = {
-                                menuExpanded = false
-                                onDelete()
-                            },
-                            enabled = enabled && !item.current,
-                            leadingIcon = {
-                                Icon(
-                                    Icons.Rounded.Delete,
-                                    contentDescription = null,
-                                    tint = MaterialTheme.colorScheme.error,
-                                )
-                            },
-                        )
-                    }
+                OverlayIconDropdownMenu(
+                    entries = listOf(
+                        DropdownEntry(
+                            items = listOf(
+                                DropdownItem(
+                                    text = "重命名",
+                                    enabled = enabled,
+                                    onClick = onRename,
+                                    icon = { modifier -> Icon(MiuixIcons.Edit, null, modifier) },
+                                ),
+                            ),
+                        ),
+                        DropdownEntry(
+                            items = listOf(
+                                DropdownItem(
+                                    text = if (item.current) "正在使用，无法删除" else "删除",
+                                    enabled = enabled && !item.current,
+                                    onClick = onDelete,
+                                    icon = { modifier -> Icon(MiuixIcons.Delete, null, modifier) },
+                                ),
+                            ),
+                        ),
+                    ),
+                    enabled = enabled,
+                    collapseOnSelection = true,
+                ) {
+                    Icon(
+                        MiuixIcons.More,
+                        contentDescription = "管理 ${item.name}",
+                    )
                 }
             }
 
-            HorizontalDivider(color = cardContentColor.copy(alpha = 0.12f))
+            HorizontalDivider(color = MiuixTheme.colorScheme.dividerLine)
 
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -568,13 +541,13 @@ private fun WallpaperCard(
                         },
                     ) {
                         CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
-                        Text("$pendingAction…", style = MaterialTheme.typography.labelLarge)
+                        Text("$pendingAction…", style = MiuixTheme.textStyles.footnote1)
                     }
                 } else if (item.current) {
                     Surface(
-                        shape = MaterialTheme.shapes.extraLarge,
-                        color = MaterialTheme.colorScheme.primary,
-                        contentColor = MaterialTheme.colorScheme.onPrimary,
+                        shape = RoundedCornerShape(28.dp),
+                        color = MiuixTheme.colorScheme.primary,
+                        contentColor = MiuixTheme.colorScheme.onPrimary,
                     ) {
                         Row(
                             modifier = Modifier.padding(horizontal = 12.dp, vertical = 7.dp),
@@ -582,18 +555,18 @@ private fun WallpaperCard(
                             horizontalArrangement = Arrangement.spacedBy(6.dp),
                         ) {
                             Icon(
-                                Icons.Rounded.CheckCircle,
+                                MiuixIcons.Ok,
                                 contentDescription = null,
                                 modifier = Modifier.size(18.dp),
                             )
-                            Text("正在使用", style = MaterialTheme.typography.labelLarge)
+                            Text("正在使用", style = MiuixTheme.textStyles.footnote1)
                         }
                     }
                 } else {
                     Text(
                         text = "未应用",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = cardContentColor.copy(alpha = 0.72f),
+                        style = MiuixTheme.textStyles.footnote2,
+                        color = cardSummaryColor,
                     )
                 }
 
@@ -618,8 +591,8 @@ private fun WallpaperLoadError(
     ElevatedCard(
         modifier = Modifier.fillMaxWidth(),
         colors = CardDefaults.elevatedCardColors(
-            containerColor = MaterialTheme.colorScheme.errorContainer,
-            contentColor = MaterialTheme.colorScheme.onErrorContainer,
+            containerColor = MiuixTheme.colorScheme.errorContainer,
+            contentColor = MiuixTheme.colorScheme.onErrorContainer,
         ),
     ) {
         Row(
@@ -627,19 +600,19 @@ private fun WallpaperLoadError(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            Icon(Icons.Rounded.ErrorOutline, contentDescription = null)
+            Icon(MiuixIcons.Report, contentDescription = null)
             Column(
                 modifier = Modifier.weight(1f),
                 verticalArrangement = Arrangement.spacedBy(3.dp),
             ) {
                 Text("无法载入壁纸", fontWeight = FontWeight.SemiBold)
-                Text(message, style = MaterialTheme.typography.bodySmall)
+                Text(message, style = MiuixTheme.textStyles.footnote2)
             }
             TextButton(
                 onClick = onRetry,
                 enabled = retryEnabled,
                 colors = ButtonDefaults.textButtonColors(
-                    contentColor = MaterialTheme.colorScheme.onErrorContainer,
+                    contentColor = MiuixTheme.colorScheme.onErrorContainer,
                 ),
             ) {
                 Text("重试")
@@ -662,13 +635,13 @@ private fun WallpaperEmptyState(
     ) {
         Surface(
             modifier = Modifier.size(72.dp),
-            shape = MaterialTheme.shapes.extraLarge,
-            color = MaterialTheme.colorScheme.secondaryContainer,
-            contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
+            shape = RoundedCornerShape(28.dp),
+            color = MiuixTheme.colorScheme.secondaryContainer,
+            contentColor = MiuixTheme.colorScheme.onSecondaryContainer,
         ) {
             Box(contentAlignment = Alignment.Center) {
                 Icon(
-                    Icons.Rounded.Wallpaper,
+                    MiuixIcons.Background,
                     contentDescription = null,
                     modifier = Modifier.size(34.dp),
                 )
@@ -676,18 +649,18 @@ private fun WallpaperEmptyState(
         }
         Text(
             text = "还没有 OuterView 壁纸",
-            style = MaterialTheme.typography.titleMedium,
+            style = MiuixTheme.textStyles.title2,
             fontWeight = FontWeight.SemiBold,
         )
         Text(
             text = "导入可信的 MRC 或 ZIP 壁纸包后，即可在这里应用和管理。",
             modifier = Modifier.fillMaxWidth(),
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            style = MiuixTheme.textStyles.body2,
+            color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
             textAlign = TextAlign.Center,
         )
         FilledTonalButton(onClick = onImport, enabled = enabled) {
-            Icon(Icons.Rounded.Add, contentDescription = null)
+            Icon(MiuixIcons.Add, contentDescription = null)
             Text("导入第一张壁纸", modifier = Modifier.padding(start = 8.dp))
         }
     }
