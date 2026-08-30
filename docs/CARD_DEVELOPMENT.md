@@ -62,7 +62,8 @@ OuterView 首次导入时生成随机 128 位 `cardId`，并固定使用 `outerv
 - 解压估算最大 64 MB。
 - 最多 1024 个条目。
 - 拒绝绝对路径、`..`、DOCTYPE 和非 Widget v2 模板。
-- 扫描 `IntentCommand` 与 `ExternCommand`，发现后要求用户确认。
+- 扫描包内全部 `.xml`（路径大小写不敏感），发现 `IntentCommand`、`ExternCommand`、
+  `MethodCommand`、外部数据 Binder 或蓝牙/网络/铃声/Wi-Fi 系统控制命令后要求用户确认。
 
 除非功能确实需要，不要使用外部命令、广播或启动 Activity。不得把密钥、账号、设备标识或私有接口凭据写进卡片。
 

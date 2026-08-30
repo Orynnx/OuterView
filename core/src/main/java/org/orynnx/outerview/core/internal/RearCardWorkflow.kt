@@ -57,14 +57,66 @@ internal object RearCardWorkflow {
     fun shouldHide(record: CustomCardRecord, notificationActive: Boolean): Boolean =
         record.desiredEnabled || record.stateEnum == RearCardState.INSTALLED_ENABLED || notificationActive
 
-    fun needsHostCleanup(record: CustomCardRecord): Boolean =
-        record.stateEnum != RearCardState.NOT_INSTALLED || record.hostTemplatePath != null
+    fun needsHostCleanup(record: CustomCardRecord): Boolean = if (record.deleted) {
+        record.cleanupPending
+    } else {
+        record.desiredEnabled ||
+            record.pendingInstall ||
+            record.cleanupPending ||
+            record.stateEnum != RearCardState.NOT_INSTALLED ||
+            record.hostTemplatePath != null
+    }
 
-    fun cleanupTombstone(record: CustomCardRecord, message: String): CustomCardRecord = record.copy(
+    fun deletionTombstone(
+        record: CustomCardRecord,
+        message: String,
+        now: Long = System.currentTimeMillis(),
+    ): CustomCardRecord = record.copy(
         desiredEnabled = false,
+        pendingInstall = false,
         deleted = true,
-        cleanupPending = true,
+        cleanupPending = needsHostCleanup(record),
         lastMessage = message,
-        updatedAt = System.currentTimeMillis(),
+        updatedAt = now,
     )
+
+    fun hostCleanupResult(
+        record: CustomCardRecord,
+        success: Boolean,
+        cleanupStillPending: Boolean,
+        message: String,
+        commandId: String,
+        now: Long = System.currentTimeMillis(),
+    ): CustomCardRecord = record.copy(
+        state = when {
+            !success -> RearCardState.ERROR.value
+            cleanupStillPending -> RearCardState.INSTALLED_DISABLED.value
+            else -> RearCardState.NOT_INSTALLED.value
+        },
+        desiredEnabled = false,
+        pendingInstall = false,
+        deleted = true,
+        cleanupPending = !success || cleanupStillPending,
+        hostTemplatePath = if (success && !cleanupStillPending) null else record.hostTemplatePath,
+        lastCommandId = commandId,
+        lastMessage = message,
+        updatedAt = now,
+    )
+
+    fun localCleanupFailed(
+        record: CustomCardRecord,
+        message: String,
+        now: Long = System.currentTimeMillis(),
+    ): CustomCardRecord = record.copy(
+        state = RearCardState.ERROR.value,
+        desiredEnabled = false,
+        pendingInstall = false,
+        deleted = true,
+        cleanupPending = false,
+        lastMessage = message,
+        updatedAt = now,
+    )
+
+    fun cleanupTombstone(record: CustomCardRecord, message: String): CustomCardRecord =
+        deletionTombstone(record, message).copy(cleanupPending = true)
 }

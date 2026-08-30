@@ -25,7 +25,7 @@ dependencies {
 Maven 坐标为：
 
 ```kotlin
-implementation("org.orynnx.outerview:fun-card-core:3.0.0")
+implementation("org.orynnx.outerview:fun-card-core:2.4.0")
 ```
 
 ## 高层端点
@@ -79,7 +79,7 @@ scope.launch {
 
 ## Host API
 
-Host API 当前版本为 3，由签名权限保护，并校验 provider 包名和实例 ID。主要 Binder 方法包括模板安装/卸载、runtime 激活/移除、全部清理和诊断。客户端会把空 Bundle、版本不匹配和连接失败转换为结果对象，不向 UI 抛 Binder 异常。
+Assistant Host API 当前版本为 5，Wallpaper Host API 当前版本为 3；两者均由签名权限保护，并校验 provider 包名和实例 ID。Assistant Binder 方法包括模板安装/卸载、runtime 激活/移除、全部清理和诊断。客户端会把空 Bundle、版本不匹配和连接失败转换为结果对象，不向 UI 抛 Binder 异常。
 
 二次开发时可以替换整个 UI，但 APK 包名、签名权限、Hook provider 与客户端契约必须成套调整，否则客户端会拒绝连接。
 

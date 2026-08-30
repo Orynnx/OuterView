@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -115,7 +116,7 @@ fun TextButton(
 ) {
     MiuixButton(
         onClick = onClick,
-        modifier = modifier,
+        modifier = modifier.heightIn(min = 48.dp),
         enabled = enabled,
         colors = MiuixButtonDefaults.buttonColors(
             color = colors.containerColor,
@@ -137,7 +138,7 @@ fun OutlinedButton(
     content: @Composable RowScope.() -> Unit,
 ) = MiuixButton(
     onClick = onClick,
-    modifier = modifier.border(
+    modifier = modifier.heightIn(min = 48.dp).border(
         BorderStroke(
             width = 1.dp,
             color = if (enabled) MiuixTheme.colorScheme.outline else {
@@ -165,7 +166,7 @@ fun FilledTonalButton(
     content: @Composable RowScope.() -> Unit,
 ) = MiuixButton(
     onClick = onClick,
-    modifier = modifier,
+    modifier = modifier.heightIn(min = 48.dp),
     enabled = enabled,
     colors = MiuixButtonDefaults.buttonColors(
         color = MiuixTheme.colorScheme.secondaryContainer,
@@ -173,6 +174,20 @@ fun FilledTonalButton(
         contentColor = MiuixTheme.colorScheme.onSecondaryContainer,
         disabledContentColor = MiuixTheme.colorScheme.onSurfaceVariantSummary,
     ),
+    content = content,
+)
+
+@Composable
+fun PrimaryButton(
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    enabled: Boolean = true,
+    content: @Composable RowScope.() -> Unit,
+) = MiuixButton(
+    onClick = onClick,
+    modifier = modifier.heightIn(min = 48.dp),
+    enabled = enabled,
+    colors = MiuixButtonDefaults.buttonColorsPrimary(),
     content = content,
 )
 
@@ -189,7 +204,7 @@ fun ExtendedFloatingActionButton(
 ) {
     MiuixButton(
         onClick = onClick,
-        modifier = modifier,
+        modifier = modifier.heightIn(min = 48.dp),
         enabled = enabled,
         cornerRadius = 20.dp,
         colors = MiuixButtonDefaults.buttonColors(
@@ -288,7 +303,7 @@ fun AlertDialog(
                 text?.invoke()
                 Row(
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.End,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp, Alignment.End),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     dismissButton?.invoke()

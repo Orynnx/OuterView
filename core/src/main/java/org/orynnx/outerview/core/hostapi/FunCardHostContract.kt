@@ -4,6 +4,8 @@ object FunCardHostContract {
     const val API_VERSION = 5
     const val PROVIDER_PACKAGE = "org.orynnx.outerview"
     const val HOST_PACKAGE = "com.xiaomi.subscreencenter"
+    const val ACCESS_HOST_API_PERMISSION =
+        "org.orynnx.outerview.permission.ACCESS_HOST_API"
     const val ACTION_REQUEST_SERVICE =
         "org.orynnx.outerview.action.REQUEST_FUN_CARD_HOST_SERVICE"
     const val EXTRA_BUNDLE = "hostApiBundle"

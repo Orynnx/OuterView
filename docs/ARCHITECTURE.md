@@ -13,7 +13,7 @@ Compose UI
 
 ## 为什么不使用通知
 
-早期版本通过真实静默通知触发 `handleNotificationPosted`。这条链路容易被用户划除通知、通知权限和系统清理策略打断。Host API v3 在宿主进程中构造等价 extras，并直接调用已解析的原生 Post Runnable；隐藏则调用宿主按 package/business 移除方法。
+早期版本通过真实静默通知触发 `handleNotificationPosted`。这条链路容易被用户划除通知、通知权限和系统清理策略打断。Assistant Host API v5 在宿主进程中构造等价 extras，并直接调用已解析的原生 Post Runnable；隐藏则调用宿主按 package/business 移除方法。
 
 ## 一致性
 
@@ -21,4 +21,4 @@ Compose UI
 
 ## 文件边界
 
-宿主模板位于当前用户的 `subscreencenter/smart_assistant/outerview_custom_<cardId>`，是无扩展名 ZIP。Hook 只删除规范化后位于该目录且名称符合专属前缀的文件。3.0 仅在本应用旧 registry 已记录相同 `cardId` 时兼容旧前缀；系统模板、其他模块模板与 `notification_widget.json` 永远只读。
+宿主模板位于当前用户的 `subscreencenter/smart_assistant/outerview_custom_<cardId>`，是无扩展名 ZIP。Hook 只删除规范化后位于该目录且名称符合专属前缀的文件。2.4.0 仅在本应用旧 registry 已记录相同 `cardId` 时兼容旧前缀；系统模板、其他模块模板与 `notification_widget.json` 永远只读。

@@ -5,6 +5,7 @@ import org.xml.sax.SAXException
 import java.io.ByteArrayInputStream
 import java.nio.charset.StandardCharsets
 import java.util.Locale
+import javax.xml.XMLConstants
 import javax.xml.parsers.DocumentBuilderFactory
 
 object SecureManifestXml {
@@ -18,6 +19,13 @@ object SecureManifestXml {
         val factory = DocumentBuilderFactory.newInstance().apply {
             isNamespaceAware = false
             isExpandEntityReferences = false
+            try {
+                isXIncludeAware = false
+            } catch (_: UnsupportedOperationException) {
+                // Android's Harmony factory does not implement this setter and
+                // does not support XInclude; its effective default is already false.
+            }
+            setFeatureIfSupported(XMLConstants.FEATURE_SECURE_PROCESSING, true)
             setFeatureIfSupported("http://apache.org/xml/features/disallow-doctype-decl", true)
             setFeatureIfSupported("http://xml.org/sax/features/external-general-entities", false)
             setFeatureIfSupported("http://xml.org/sax/features/external-parameter-entities", false)

@@ -1,6 +1,5 @@
 package org.orynnx.outerview.hook.dex
 
-import android.util.AtomicFile
 import android.util.Log
 import com.android.tools.smali.dexlib2.Opcode
 import com.android.tools.smali.dexlib2.Opcodes
@@ -10,8 +9,12 @@ import com.android.tools.smali.dexlib2.iface.reference.FieldReference
 import com.android.tools.smali.dexlib2.iface.reference.StringReference
 import org.json.JSONObject
 import java.io.BufferedInputStream
+import java.io.ByteArrayOutputStream
 import java.io.File
+import java.io.FileOutputStream
 import java.lang.reflect.Modifier
+import java.nio.file.Files
+import java.nio.file.StandardCopyOption
 import java.security.MessageDigest
 import java.util.concurrent.ConcurrentHashMap
 import java.util.zip.ZipFile
@@ -152,7 +155,16 @@ internal class HostDexResolver private constructor(
         fun open(sourceDir: String, dataDir: String, versionCode: Long): HostDexResolver {
             val key = "$sourceDir\u0000$versionCode"
             return instances.computeIfAbsent(key) {
-                val files = File(dataDir, "files").apply { mkdirs() }
+                val dataRoot = File(dataDir).absoluteFile
+                require(!Files.isSymbolicLink(dataRoot.toPath())) { "host data directory must not be a symbolic link" }
+                val files = File(dataRoot, "files").absoluteFile
+                require(files.parentFile == dataRoot && !Files.isSymbolicLink(files.toPath())) {
+                    "hook cache directory is unsafe"
+                }
+                check(files.isDirectory || files.mkdirs()) { "failed to create hook cache directory" }
+                require(files.canonicalFile.parentFile == dataRoot.canonicalFile) {
+                    "hook cache directory escaped host data directory"
+                }
                 HostDexResolver(
                     sourceApk = File(sourceDir),
                     cacheFile = File(files, "outerview_hook_points.json"),
@@ -299,7 +311,16 @@ private class HookPointCache(
     cacheFile: File,
     private val sourceIdentity: String,
 ) {
-    private val file = AtomicFile(cacheFile)
+    private val file = cacheFile.absoluteFile.also { target ->
+        val parent = requireNotNull(target.parentFile) { "Hook point cache parent is missing" }
+        require(parent.isDirectory && !Files.isSymbolicLink(parent.toPath())) {
+            "Hook point cache parent is unsafe"
+        }
+        require(!Files.isSymbolicLink(target.toPath())) { "Hook point cache must not be a symbolic link" }
+        require(target.canonicalFile.parentFile == parent.canonicalFile) {
+            "Hook point cache escaped its directory"
+        }
+    }
     private var root: JSONObject = readRoot()
 
     fun method(key: String, fingerprint: String): HostMethodRef? {
@@ -375,9 +396,25 @@ private class HookPointCache(
 
     private fun readRoot(): JSONObject {
         val loaded = runCatching {
-            file.openRead().bufferedReader(Charsets.UTF_8).use { JSONObject(it.readText()) }
+            require(!Files.isSymbolicLink(file.toPath())) { "Hook point cache must not be a symbolic link" }
+            file.inputStream().use { input ->
+                val output = ByteArrayOutputStream()
+                val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+                var total = 0
+                while (true) {
+                    val read = input.read(buffer)
+                    if (read < 0) break
+                    if (read == 0) continue
+                    total += read
+                    require(total <= MAX_CACHE_BYTES) { "Hook point cache is too large" }
+                    output.write(buffer, 0, read)
+                }
+                JSONObject(output.toString(Charsets.UTF_8.name()))
+            }
         }.getOrNull()
-        return if (loaded?.optString("sourceIdentity") == sourceIdentity) {
+        return if (loaded?.optInt("schema") == CACHE_SCHEMA &&
+            loaded.optString("sourceIdentity") == sourceIdentity
+        ) {
             loaded
         } else {
             JSONObject().apply {
@@ -389,19 +426,33 @@ private class HookPointCache(
     }
 
     private fun writeRoot() {
-        val output = file.startWrite()
+        val bytes = root.toString().toByteArray(Charsets.UTF_8)
+        require(bytes.size <= MAX_CACHE_BYTES) { "Hook point cache is too large" }
+        val parent = requireNotNull(file.parentFile) { "Hook point cache parent is missing" }
+        require(parent.isDirectory && !Files.isSymbolicLink(parent.toPath())) {
+            "Hook point cache parent is unsafe"
+        }
+        require(!Files.isSymbolicLink(file.toPath())) { "Hook point cache must not be a symbolic link" }
+        val temp = File.createTempFile(".outerview_hook_", ".tmp", parent)
         try {
-            output.write(root.toString().toByteArray(Charsets.UTF_8))
-            output.flush()
-            file.finishWrite(output)
-        } catch (error: Throwable) {
-            file.failWrite(output)
-            throw error
+            FileOutputStream(temp, false).use { output ->
+                output.write(bytes)
+                output.fd.sync()
+            }
+            Files.move(
+                temp.toPath(),
+                file.toPath(),
+                StandardCopyOption.ATOMIC_MOVE,
+                StandardCopyOption.REPLACE_EXISTING,
+            )
+        } finally {
+            Files.deleteIfExists(temp.toPath())
         }
     }
 
     companion object {
         private const val CACHE_SCHEMA = 1
+        private const val MAX_CACHE_BYTES = 1024 * 1024
         private const val PARAMETER_SEPARATOR = "\u0001"
     }
 }

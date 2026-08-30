@@ -15,15 +15,15 @@ android {
         applicationId = "org.orynnx.outerview"
         minSdk = 36
         targetSdk = 36
-        versionCode = 10
-        versionName = "2.4.0"
+        versionCode = 11
+        versionName = "2.4.1"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
-    // The app ships Chinese UI with an English fallback; do not package
-    // unused locale resources from Compose/Miuix dependencies.
+    // OuterView currently ships a Chinese UI; do not package unused locale
+    // resources from Compose/Miuix dependencies.
     androidResources {
-        localeFilters += setOf("en", "zh", "zh-rCN")
+        localeFilters += setOf("zh", "zh-rCN")
     }
 
     buildTypes {

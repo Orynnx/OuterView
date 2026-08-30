@@ -7,7 +7,7 @@
 OuterView 是面向小米 17 Pro / 17 Pro Max 背屏的自定义 Smart Assistant 卡片与壁纸管理器，
 同时提供独立 LSPosed 模块和 Compose 管理界面。
 
-当前版本：`2.4.0`；Assistant Host API：`v5`；Wallpaper Host API：`v2`。
+当前版本：`2.4.1`；Assistant Host API：`v5`；Wallpaper Host API：`v3`。
 
 ## 2.4.0 的许可证迁移与独立性
 
@@ -47,7 +47,7 @@ OuterView 是面向小米 17 Pro / 17 Pro Max 背屏的自定义 Smart Assistant
 
 ## 构建与验证
 
-要求 JDK 17、Android SDK 36：
+要求 JDK 17、Android SDK 37：
 
 ```powershell
 $env:JAVA_HOME = "C:\Program Files\Android\Android Studio\jbr"
@@ -74,8 +74,9 @@ docs/                架构、二次开发和迁移说明
 
 OuterView 新资源固定使用 `outerview_custom_` / `outerview_wallpaper_` 前缀及专属 registry。
 系统模板、系统持久化文件和其他模块资源不属于管理范围。旧前缀只在本应用签名权限保护的
-Host API 和本应用 registry 记录共同成立时兼容。导入 ZIP 仍是可执行 MAML 内容，请只安装
-可信来源的卡片。详见 [SECURITY.md](SECURITY.md)。
+Host API 和本应用 registry 记录共同成立时兼容。卡片导入会扫描包内全部 XML 并提示可执行、
+反射、外部数据和系统控制能力；壁纸导入会直接拒绝这些能力。扫描不能代替来源信任，请只安装
+可信来源的包。详见 [SECURITY.md](SECURITY.md)。
 
 ## AI 创作声明
 

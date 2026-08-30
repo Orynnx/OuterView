@@ -1,25 +1,27 @@
 package org.orynnx.outerview
 
 import android.app.Activity
+import android.app.DownloadManager
 import android.os.Bundle
-import android.os.ParcelFileDescriptor
-import android.util.Log
-import android.provider.OpenableColumns
 import android.content.BroadcastReceiver
 import android.content.Intent
 import android.content.IntentFilter
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.animateContentSize
-import androidx.compose.animation.core.animateDpAsState
-import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.togetherWith
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.PaddingValues
@@ -28,7 +30,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -39,7 +41,6 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
-import top.yukonga.miuix.kmp.basic.Button
 import top.yukonga.miuix.kmp.basic.CardDefaults as MiuixCardDefaults
 import top.yukonga.miuix.kmp.basic.CircularProgressIndicator
 import top.yukonga.miuix.kmp.basic.DropdownEntry
@@ -49,6 +50,7 @@ import top.yukonga.miuix.kmp.basic.Icon
 import top.yukonga.miuix.kmp.basic.IconButton
 import top.yukonga.miuix.kmp.basic.NavigationBar
 import top.yukonga.miuix.kmp.basic.NavigationBarItem
+import top.yukonga.miuix.kmp.basic.MiuixScrollBehavior
 import top.yukonga.miuix.kmp.basic.Scaffold
 import top.yukonga.miuix.kmp.basic.SnackbarHost
 import top.yukonga.miuix.kmp.basic.SnackbarHostState
@@ -76,6 +78,7 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
@@ -84,11 +87,8 @@ import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.alpha
-import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.input.pointer.PointerEventPass
-import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.platform.LocalView
@@ -101,7 +101,6 @@ import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.zIndex
 import androidx.core.content.ContextCompat
 import androidx.core.view.WindowCompat
 import org.orynnx.outerview.core.CardImportPreview
@@ -114,88 +113,34 @@ import org.orynnx.outerview.core.RearCardState
 import org.orynnx.outerview.core.wallpaperapi.RearWallpaperHostClient
 import org.orynnx.outerview.core.wallpaperapi.RearWallpaperHostContract
 import org.orynnx.outerview.core.hostapi.FunCardHostContract
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import org.json.JSONObject
 
 class MainActivity : ComponentActivity() {
+    private var resumeTick by mutableIntStateOf(0)
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
-        runDebugWallpaperAction()
-        runDebugAssistantAction()
         setContent {
             FunCardManagerTheme {
-                OuterViewApp()
+                OuterViewApp(resumeTick)
             }
         }
     }
 
-    private fun runDebugWallpaperAction() {
-        if (!BuildConfig.DEBUG) return
-        val action = intent?.action ?: return
-        if (action !in setOf("org.orynnx.outerview.DEBUG_APPLY_WALLPAPER", "org.orynnx.outerview.DEBUG_IMPORT_WALLPAPER", "org.orynnx.outerview.DEBUG_RENAME_WALLPAPER")) return
-        Thread {
-            val client = RearWallpaperHostClient()
-            val result = runCatching {
-                check(client.connect(applicationContext)) { "wallpaper host not connected" }
-                when (action) {
-                    "org.orynnx.outerview.DEBUG_APPLY_WALLPAPER" -> {
-                        val wallpaperId = intent.getIntExtra("wallpaperId", Int.MIN_VALUE)
-                        check(wallpaperId != Int.MIN_VALUE) { "missing wallpaperId" }
-                        client.apply(wallpaperId)
-                    }
-                    "org.orynnx.outerview.DEBUG_RENAME_WALLPAPER" -> {
-                        val wallpaperId = intent.getIntExtra("wallpaperId", Int.MIN_VALUE)
-                        check(wallpaperId != Int.MIN_VALUE) { "missing wallpaperId" }
-                        client.rename(wallpaperId, intent.getStringExtra("name").orEmpty())
-                    }
-                    else -> {
-                        val path = intent.getStringExtra("path") ?: error("missing path")
-                        ParcelFileDescriptor.open(java.io.File(path), ParcelFileDescriptor.MODE_READ_ONLY).use {
-                            client.import(it, java.io.File(path).name)
-                        }
-                    }
-                }
-            }.getOrElse { Bundle().apply { putBoolean(RearWallpaperHostContract.Keys.SUCCESS, false); putString(RearWallpaperHostContract.Keys.MESSAGE, it.message) } }
-            Log.i("OuterView-Wallpaper-Test", "action=$action id=${result.getInt(RearWallpaperHostContract.Keys.WALLPAPER_ID, Int.MIN_VALUE)} success=${result.getBoolean(RearWallpaperHostContract.Keys.SUCCESS)} message=${result.getString(RearWallpaperHostContract.Keys.MESSAGE)}")
-        }.start()
+    override fun onResume() {
+        super.onResume()
+        resumeTick++
     }
 
-    private fun runDebugAssistantAction() {
-        if (!BuildConfig.DEBUG) return
-        val action = intent?.action ?: return
-        if (action !in setOf(
-                "org.orynnx.outerview.DEBUG_SHOW_ASSISTANT",
-                "org.orynnx.outerview.DEBUG_HIDE_ASSISTANT",
-                "org.orynnx.outerview.DEBUG_DELETE_ASSISTANT",
-            )
-        ) return
-        Thread {
-            runCatching {
-                runBlocking {
-                    val manager = RearCardManager.create(applicationContext)
-                    val cardId = intent.getStringExtra("cardId")
-                        ?: manager.refresh().cards.firstOrNull()?.cardId
-                        ?: error("no managed Assistant card")
-                    when (action) {
-                        "org.orynnx.outerview.DEBUG_SHOW_ASSISTANT" -> manager.setVisible(cardId, true)
-                        "org.orynnx.outerview.DEBUG_HIDE_ASSISTANT" -> manager.setVisible(cardId, false)
-                        else -> manager.deleteCard(cardId)
-                    }
-                }
-            }.onSuccess { result ->
-                Log.i(
-                    "OuterView-Assistant-Test",
-                    "action=$action success=${result.success} state=${result.state} message=${result.message}",
-                )
-            }.onFailure { error ->
-                Log.e("OuterView-Assistant-Test", "action=$action failed", error)
-            }
-        }.start()
-    }
 }
 
 private enum class MainDestination(val label: String) {
@@ -205,8 +150,11 @@ private enum class MainDestination(val label: String) {
 }
 
 @Composable
-private fun OuterViewApp() {
+private fun OuterViewApp(resumeTick: Int) {
     var destination by rememberSaveable { mutableStateOf(MainDestination.ASSISTANT) }
+    BackHandler(enabled = destination != MainDestination.ASSISTANT) {
+        destination = MainDestination.ASSISTANT
+    }
     Scaffold(
         bottomBar = {
             NavigationBar {
@@ -226,59 +174,28 @@ private fun OuterViewApp() {
             }
         },
     ) { padding ->
-        BoxWithConstraints(
-            Modifier
+        AnimatedContent(
+            targetState = destination,
+            modifier = Modifier
                 .fillMaxSize()
                 .padding(padding)
-                .consumeWindowInsets(padding)
-                .clipToBounds(),
-        ) {
-            MainDestination.entries.forEach { page ->
-                val active = destination == page
-                val targetOffset = when {
-                    active -> 0.dp
-                    page.ordinal < destination.ordinal -> -maxWidth
-                    else -> maxWidth
-                }
-                val offsetX by animateDpAsState(
-                    targetValue = targetOffset,
-                    animationSpec = tween(260),
-                    label = "${page.name}-offset",
-                )
-                val pageAlpha by animateFloatAsState(
-                    targetValue = if (active) 1f else 0f,
-                    animationSpec = tween(200),
-                    label = "${page.name}-alpha",
-                )
-                Box(
-                    Modifier
-                        .fillMaxSize()
-                        .offset(x = offsetX)
-                        .alpha(pageAlpha)
-                        .zIndex(if (active) 1f else 0f)
-                        .then(
-                            if (active) {
-                                Modifier
-                            } else {
-                                Modifier
-                                    .clearAndSetSemantics { }
-                                    .pointerInput(Unit) {
-                                        awaitPointerEventScope {
-                                            while (true) {
-                                                awaitPointerEvent(PointerEventPass.Initial)
-                                                    .changes
-                                                    .forEach { it.consume() }
-                                            }
-                                        }
-                                    }
-                            },
-                        ),
-                ) {
-                    when (page) {
-                        MainDestination.ASSISTANT -> FunCardManagerApp(active)
-                        MainDestination.WALLPAPER -> RearWallpaperManagerApp(active)
-                        MainDestination.ABOUT -> AboutApp(active)
-                    }
+                .consumeWindowInsets(padding),
+            transitionSpec = {
+                val direction = if (targetState.ordinal > initialState.ordinal) 1 else -1
+                val enter = slideInHorizontally(tween(260)) { width -> direction * width } +
+                    fadeIn(tween(200))
+                val exit = slideOutHorizontally(tween(260)) { width -> -direction * width } +
+                    fadeOut(tween(200))
+                enter togetherWith exit
+            },
+            contentAlignment = Alignment.TopStart,
+            label = "main-destination",
+        ) { page ->
+            Box(Modifier.fillMaxSize()) {
+                when (page) {
+                    MainDestination.ASSISTANT -> FunCardManagerApp(page == destination, resumeTick)
+                    MainDestination.WALLPAPER -> RearWallpaperManagerApp(page == destination, resumeTick)
+                    MainDestination.ABOUT -> AboutApp(page == destination, resumeTick)
                 }
             }
         }
@@ -286,24 +203,44 @@ private fun OuterViewApp() {
 }
 
 @Composable
-private fun AboutApp(active: Boolean) {
+private fun AboutApp(active: Boolean, resumeTick: Int) {
     val uriHandler = LocalUriHandler.current
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
+    val scrollBehavior = MiuixScrollBehavior()
     var checkingUpdate by remember { mutableStateOf(false) }
     var update by remember { mutableStateOf<AppUpdateInfo?>(null) }
     var updateMessage by remember { mutableStateOf<String?>(null) }
+    var updateMessageIsError by remember { mutableStateOf(false) }
     var checkedOnce by remember { mutableStateOf(false) }
-    var queuedDownloadVersion by remember { mutableStateOf<String?>(null) }
-    var downloadButtonCoolingDown by remember { mutableStateOf(false) }
+    var downloadState by remember { mutableStateOf(AppUpdateDownloadState()) }
+    var rememberedDownloadVersion by remember(context) {
+        mutableStateOf(
+            AppUpdateManager.rememberedDownloadVersion(context)?.takeIf { version ->
+                runCatching {
+                    AppUpdateManager.compareVersions(version, BuildConfig.VERSION_NAME) > 0
+                }.getOrDefault(false)
+            },
+        )
+    }
+    var updateActionBusy by remember { mutableStateOf(false) }
     fun checkUpdate() {
         if (checkingUpdate) return
         checkingUpdate = true
         updateMessage = null
+        updateMessageIsError = false
         scope.launch {
             AppUpdateManager.checkLatest(BuildConfig.VERSION_NAME)
-                .onSuccess { update = it; updateMessage = if (it == null) "已是最新版本" else null }
-                .onFailure { update = null; updateMessage = it.message ?: "无法检查更新" }
+                .onSuccess {
+                    update = it
+                    updateMessage = if (it == null) "已是最新版本" else null
+                    updateMessageIsError = false
+                }
+                .onFailure {
+                    update = null
+                    updateMessage = it.message ?: "无法检查更新"
+                    updateMessageIsError = true
+                }
             checkingUpdate = false
         }
     }
@@ -313,9 +250,111 @@ private fun AboutApp(active: Boolean) {
             checkUpdate()
         }
     }
-    Scaffold(topBar = { TopAppBar(title = "关于") }) { padding ->
+    LaunchedEffect(update?.version, resumeTick) {
+        val storedVersion = withContext(Dispatchers.IO) {
+            AppUpdateManager.rememberedDownloadVersion(context)
+        }?.takeIf { version ->
+            runCatching {
+                AppUpdateManager.compareVersions(version, BuildConfig.VERSION_NAME) > 0
+            }.getOrDefault(false)
+        }
+        rememberedDownloadVersion = storedVersion
+        val version = update?.version ?: storedVersion
+        downloadState = if (version == null) {
+            AppUpdateDownloadState()
+        } else {
+            withContext(Dispatchers.IO) { AppUpdateManager.downloadState(context, version) }
+        }
+    }
+    val observedDownloadVersion by rememberUpdatedState(update?.version ?: rememberedDownloadVersion)
+    val observedDownloadState by rememberUpdatedState(downloadState)
+    DisposableEffect(context) {
+        val receiver = object : BroadcastReceiver() {
+            override fun onReceive(receiverContext: android.content.Context?, intent: Intent?) {
+                val version = observedDownloadVersion ?: return
+                if (intent?.action != DownloadManager.ACTION_DOWNLOAD_COMPLETE) return
+                val completedId = intent.getLongExtra(DownloadManager.EXTRA_DOWNLOAD_ID, -1L)
+                if (observedDownloadState.id != completedId) return
+                scope.launch {
+                    val refreshed = withContext(Dispatchers.IO) {
+                        AppUpdateManager.downloadState(context, version)
+                    }
+                    downloadState = refreshed
+                    updateMessageIsError = refreshed.status == AppUpdateDownloadStatus.FAILED
+                    updateMessage = when (refreshed.status) {
+                        AppUpdateDownloadStatus.SUCCESSFUL -> "更新安装包已下载，可验证并安装"
+                        AppUpdateDownloadStatus.FAILED -> "更新下载失败，请重试"
+                        else -> updateMessage
+                    }
+                }
+            }
+        }
+        ContextCompat.registerReceiver(
+            context,
+            receiver,
+            IntentFilter(DownloadManager.ACTION_DOWNLOAD_COMPLETE),
+            ContextCompat.RECEIVER_EXPORTED,
+        )
+        onDispose { context.unregisterReceiver(receiver) }
+    }
+    fun downloadUpdate(release: AppUpdateInfo) {
+        if (updateActionBusy) return
+        updateActionBusy = true
+        scope.launch {
+            val result = withContext(Dispatchers.IO) {
+                AppUpdateManager.enqueueDownloadResult(context, release)
+            }
+            if (result.isSuccess) {
+                rememberedDownloadVersion = release.version
+                downloadState = withContext(Dispatchers.IO) {
+                    AppUpdateManager.downloadState(context, release.version)
+                }
+                updateMessage = if (downloadState.status == AppUpdateDownloadStatus.SUCCESSFUL) {
+                    "安装包已经下载完成"
+                } else {
+                    "已加入系统下载队列"
+                }
+                updateMessageIsError = false
+            } else {
+                updateMessage = result.exceptionOrNull()?.message ?: "无法开始下载"
+                updateMessageIsError = true
+            }
+            updateActionBusy = false
+        }
+    }
+    fun installDownloaded(version: String) {
+        if (updateActionBusy) return
+        updateActionBusy = true
+        scope.launch {
+            val result = withContext(Dispatchers.IO) {
+                AppUpdateManager.openDownloadedApkResult(context, version)
+            }
+            if (result.isSuccess) {
+                updateMessage = "已打开系统安装程序"
+                updateMessageIsError = false
+            } else {
+                updateMessage = result.exceptionOrNull()?.message ?: "无法打开安装包"
+                updateMessageIsError = true
+            }
+            rememberedDownloadVersion = withContext(Dispatchers.IO) {
+                AppUpdateManager.rememberedDownloadVersion(context)
+            }?.takeIf { candidate ->
+                runCatching {
+                    AppUpdateManager.compareVersions(candidate, BuildConfig.VERSION_NAME) > 0
+                }.getOrDefault(false)
+            }
+            downloadState = rememberedDownloadVersion?.let { candidate ->
+                withContext(Dispatchers.IO) { AppUpdateManager.downloadState(context, candidate) }
+            } ?: AppUpdateDownloadState()
+            updateActionBusy = false
+        }
+    }
+    Scaffold(topBar = { TopAppBar(title = "关于", scrollBehavior = scrollBehavior) }) { padding ->
         LazyColumn(
-            modifier = Modifier.fillMaxSize().padding(padding),
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(padding)
+                .nestedScroll(scrollBehavior.nestedScrollConnection),
             contentPadding = PaddingValues(horizontal = 20.dp, vertical = 16.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
@@ -363,7 +402,8 @@ private fun AboutApp(active: Boolean) {
                         Text("正在检查新版本…", color = MiuixTheme.colorScheme.onSurfaceVariantSummary)
                     }
                 }
-            } else update?.let { release ->
+            }
+            update?.let { release ->
                 item {
                     Card(cornerRadius = 20.dp, modifier = Modifier.fillMaxWidth()) {
                         Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -371,49 +411,72 @@ private fun AboutApp(active: Boolean) {
                             if (release.notes.isNotBlank()) {
                                 Text(release.notes, maxLines = 4, overflow = TextOverflow.Ellipsis)
                             }
-                            Button(
-                                onClick = {
-                                    downloadButtonCoolingDown = true
-                                    runCatching { AppUpdateManager.enqueueDownload(context, release) }
-                                        .onSuccess {
-                                            queuedDownloadVersion = release.version
-                                            updateMessage = "已加入下载；完成后可点击系统通知安装"
-                                            scope.launch {
-                                                delay(1_500L)
-                                                downloadButtonCoolingDown = false
-                                            }
-                                        }
-                                        .onFailure {
-                                            updateMessage = it.message ?: "无法开始下载"
-                                            downloadButtonCoolingDown = false
-                                        }
-                                },
-                                enabled = !downloadButtonCoolingDown,
+                            PrimaryButton(
+                                onClick = { downloadUpdate(release) },
+                                enabled = !updateActionBusy && !downloadState.inProgress &&
+                                    downloadState.status != AppUpdateDownloadStatus.SUCCESSFUL,
                             ) {
                                 Text(
-                                    when {
-                                        downloadButtonCoolingDown -> "正在加入…"
-                                        queuedDownloadVersion == release.version -> "重新下载"
-                                        else -> "下载更新"
+                                    if (updateActionBusy) "正在处理…" else when (downloadState.status) {
+                                        AppUpdateDownloadStatus.PENDING -> "等待下载"
+                                        AppUpdateDownloadStatus.RUNNING -> "正在下载"
+                                        AppUpdateDownloadStatus.PAUSED -> "下载已暂停"
+                                        AppUpdateDownloadStatus.SUCCESSFUL -> "已下载"
+                                        AppUpdateDownloadStatus.FAILED -> "重新下载"
+                                        AppUpdateDownloadStatus.NONE -> "下载更新"
                                     },
                                 )
                             }
-                            TextButton(onClick = {
-                                if (!AppUpdateManager.openDownloadedApk(context, release.version)) {
-                                    updateMessage = "安装包尚未下载完成"
-                                }
-                            }) { Text("安装已下载版本") }
+                            TextButton(
+                                onClick = { installDownloaded(release.version) },
+                                enabled = !updateActionBusy &&
+                                    downloadState.status == AppUpdateDownloadStatus.SUCCESSFUL,
+                            ) { Text("验证并安装") }
+                            TextButton(onClick = { uriHandler.openUri(release.releaseUrl) }) {
+                                Text("查看完整发行说明")
+                            }
                         }
                     }
                 }
-            } ?: item {
-                OutlinedButton(onClick = ::checkUpdate) { Text("重新检查更新") }
+            }
+            if (update == null && rememberedDownloadVersion != null &&
+                downloadState.status != AppUpdateDownloadStatus.NONE
+            ) {
+                val version = rememberedDownloadVersion!!
+                item {
+                    Card(cornerRadius = 20.dp, modifier = Modifier.fillMaxWidth()) {
+                        Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                            Text("已恢复 OuterView $version 下载", fontWeight = FontWeight.SemiBold)
+                            Text(
+                                when (downloadState.status) {
+                                    AppUpdateDownloadStatus.PENDING -> "正在等待系统开始下载"
+                                    AppUpdateDownloadStatus.RUNNING -> "系统正在下载更新"
+                                    AppUpdateDownloadStatus.PAUSED -> "系统已暂停下载"
+                                    AppUpdateDownloadStatus.SUCCESSFUL -> "安装包已下载，可离线验证并安装"
+                                    AppUpdateDownloadStatus.FAILED -> "下载失败，联网检查更新后可重试"
+                                    AppUpdateDownloadStatus.NONE -> "没有可恢复的下载"
+                                },
+                                color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                            )
+                            PrimaryButton(
+                                onClick = { installDownloaded(version) },
+                                enabled = !updateActionBusy &&
+                                    downloadState.status == AppUpdateDownloadStatus.SUCCESSFUL,
+                            ) {
+                                Text(if (updateActionBusy) "正在验证…" else "验证并安装")
+                            }
+                        }
+                    }
+                }
+            }
+            if (!checkingUpdate && update == null) {
+                item { OutlinedButton(onClick = ::checkUpdate) { Text("重新检查更新") } }
             }
             updateMessage?.let { message ->
                 item {
                     Text(
                         message,
-                        color = if (message.contains("无法") || message.contains("失败")) {
+                        color = if (updateMessageIsError) {
                             MiuixTheme.colorScheme.error
                         } else MiuixTheme.colorScheme.onSurfaceVariantSummary,
                     )
@@ -425,16 +488,18 @@ private fun AboutApp(active: Boolean) {
 }
 
 @Composable
-private fun FunCardManagerApp(active: Boolean) {
+private fun FunCardManagerApp(active: Boolean, resumeTick: Int) {
     val context = LocalContext.current
     val manager = remember(context) { RearCardManager.create(context) }
     val scope = rememberCoroutineScope()
+    val scrollBehavior = MiuixScrollBehavior()
+    val refreshMutex = remember { Mutex() }
     val snackbar = remember { SnackbarHostState() }
     var cards by remember { mutableStateOf<List<ManagedRearCard>>(emptyList()) }
     var capabilities by remember { mutableStateOf(RearCardManagerCapabilities()) }
     var workingKey by remember { mutableStateOf<String?>(null) }
     var pendingImport by remember { mutableStateOf<CardImportPreview?>(null) }
-    var replacementTarget by remember { mutableStateOf<ManagedRearCard?>(null) }
+    var replacementTargetId by rememberSaveable { mutableStateOf<String?>(null) }
     var payloadTarget by remember { mutableStateOf<ManagedRearCard?>(null) }
     var diagnostics by remember { mutableStateOf<ManagedCardDiagnostics?>(null) }
     var deleteTarget by remember { mutableStateOf<ManagedRearCard?>(null) }
@@ -444,35 +509,42 @@ private fun FunCardManagerApp(active: Boolean) {
     var refreshing by remember { mutableStateOf(false) }
     var loadError by remember { mutableStateOf<String?>(null) }
     val currentWorkingKey by rememberUpdatedState(workingKey)
+    val currentProviderInstanceId by rememberUpdatedState(capabilities.providerInstanceId)
     val serviceReady = capabilities.compatible && capabilities.hookReady && capabilities.managerCaptured
+    val replacementTarget = cards.firstOrNull { it.cardId == replacementTargetId }
 
     suspend fun refresh(manual: Boolean = false) {
-        if (refreshing) return
-        refreshing = true
-        var completed = false
-        try {
-            val snapshot = manager.refresh()
-            loadError = snapshot.error
-            capabilities = snapshot.capabilities
-            if (snapshot.error == null || cards.isEmpty()) {
-                cards = snapshot.cards
+        refreshMutex.withLock {
+            refreshing = true
+            var completed = false
+            try {
+                // RearCardManager has a synchronous migration prefix (preferences
+                // plus legacy NotificationManager cleanup) before repository code
+                // reaches its own IO dispatcher. Dispatch the whole refresh so a
+                // cold start can draw its loading state immediately.
+                val snapshot = withContext(Dispatchers.IO) { manager.refresh() }
+                loadError = snapshot.error
+                capabilities = snapshot.capabilities
+                if (snapshot.error == null || cards.isEmpty()) {
+                    cards = snapshot.cards
+                }
+                if (manual) snapshot.error?.let { snackbar.showSnackbar(it) }
+                completed = true
+            } catch (error: Throwable) {
+                if (error is CancellationException) throw error
+                loadError = error.message ?: "无法刷新助手卡片"
+                capabilities = capabilities.copy(
+                    connected = false,
+                    hookReady = false,
+                    managerCaptured = false,
+                    error = loadError,
+                )
+                if (manual) snackbar.showSnackbar(loadError.orEmpty())
+                completed = true
+            } finally {
+                if (completed) initialLoading = false
+                refreshing = false
             }
-            if (manual) snapshot.error?.let { snackbar.showSnackbar(it) }
-            completed = true
-        } catch (error: Throwable) {
-            if (error is CancellationException) throw error
-            loadError = error.message ?: "无法刷新助手卡片"
-            capabilities = capabilities.copy(
-                connected = false,
-                hookReady = false,
-                managerCaptured = false,
-                error = loadError,
-            )
-            if (manual) snackbar.showSnackbar(loadError.orEmpty())
-            completed = true
-        } finally {
-            if (completed) initialLoading = false
-            refreshing = false
         }
     }
 
@@ -504,7 +576,7 @@ private fun FunCardManagerApp(active: Boolean) {
 
     fun commitImport(preview: CardImportPreview, target: ManagedRearCard?) {
         pendingImport = null
-        replacementTarget = null
+        replacementTargetId = null
         runAction(target?.cardId ?: "import") {
             if (target == null) manager.importAndInstall(preview.token)
             else manager.replaceAndInstall(target.cardId, preview.token)
@@ -515,27 +587,37 @@ private fun FunCardManagerApp(active: Boolean) {
         ActivityResultContracts.OpenDocument(),
     ) { uri ->
         if (uri == null) {
-            replacementTarget = null
+            replacementTargetId = null
             return@rememberLauncherForActivityResult
         }
         scope.launch {
-            val target = replacementTarget
+            val requestedTargetId = replacementTargetId
+            val target = requestedTargetId?.let { cardId ->
+                cards.firstOrNull { it.cardId == cardId }
+                    ?: withContext(Dispatchers.IO) { manager.refresh() }
+                        .cards
+                        .firstOrNull { it.cardId == cardId }
+                    ?: run {
+                        replacementTargetId = null
+                        snackbar.showSnackbar("原卡片已不存在，已取消替换")
+                        return@launch
+                    }
+            }
             workingKey = target?.cardId ?: "import"
             workingMessage = if (target == null) "正在检查卡片包…" else "正在检查替换模板…"
             var handedOff = false
             try {
-                val name = context.contentResolver.query(
-                    uri,
-                    arrayOf(OpenableColumns.DISPLAY_NAME),
-                    null,
-                    null,
-                    null,
-                )?.use { cursor -> if (cursor.moveToFirst()) cursor.getString(0) else null }
+                // DISPLAY_NAME is optional metadata, so do not let an untrusted
+                // DocumentsProvider block the UI with another synchronous query.
+                // Repository-side text validation handles opaque/hostile URI ids.
+                val name = uri.lastPathSegment
+                    ?.substringAfterLast('/')
+                    ?.substringAfterLast(':')
                 val result = manager.inspectImport(uri, name)
                 val preview = result.value
                 when {
                     !result.success || preview == null -> {
-                        replacementTarget = null
+                        replacementTargetId = null
                         snackbar.showSnackbar(result.message.ifBlank { "导入检查失败" })
                     }
                     preview.findings.isEmpty() -> {
@@ -549,7 +631,7 @@ private fun FunCardManagerApp(active: Boolean) {
                 }
             } catch (error: Throwable) {
                 if (error is CancellationException) throw error
-                replacementTarget = null
+                replacementTargetId = null
                 snackbar.showSnackbar(error.message ?: "无法读取所选文件")
             } finally {
                 if (!handedOff) {
@@ -560,11 +642,8 @@ private fun FunCardManagerApp(active: Boolean) {
         }
     }
 
-    LaunchedEffect(active) {
-        if (active) {
-            // A previous tab activation may still be unwinding a blocking host
-            // connection.  Wait for it instead of dropping this activation.
-            while (refreshing) delay(50L)
+    LaunchedEffect(active, resumeTick) {
+        if (active && resumeTick > 0) {
             refresh()
         }
     }
@@ -572,7 +651,11 @@ private fun FunCardManagerApp(active: Boolean) {
         var refreshJob: Job? = null
         val receiver = object : BroadcastReceiver() {
             override fun onReceive(receiverContext: android.content.Context?, intent: Intent?) {
-                if (intent?.action == FunCardHostContract.ACTION_CARD_RUNTIME_EVENT) {
+                if (
+                    intent?.action == FunCardHostContract.ACTION_CARD_RUNTIME_EVENT &&
+                    currentProviderInstanceId.isNotBlank() &&
+                    intent.getStringExtra(FunCardHostContract.Keys.PROVIDER_INSTANCE_ID) == currentProviderInstanceId
+                ) {
                     // The host posts this as soon as a card enters/leaves its runtime;
                     // it is independent of any notification popup lifecycle.
                     // An in-flight command performs its own refresh after persisting the
@@ -604,6 +687,7 @@ private fun FunCardManagerApp(active: Boolean) {
         topBar = {
             TopAppBar(
                 title = "助手卡片",
+                scrollBehavior = scrollBehavior,
                 subtitle = when {
                     initialLoading -> "正在连接背屏服务…"
                     serviceReady -> "背屏服务已连接"
@@ -614,12 +698,14 @@ private fun FunCardManagerApp(active: Boolean) {
                     IconButton(
                         onClick = { deleteAllRequested = true },
                         enabled = cards.isNotEmpty() && workingKey == null && !refreshing,
+                        modifier = Modifier.size(48.dp),
                     ) {
                         Icon(MiuixIcons.Delete, contentDescription = "删除全部卡片")
                     }
                     IconButton(
                         onClick = { scope.launch { refresh(manual = true) } },
                         enabled = workingKey == null && !refreshing,
+                        modifier = Modifier.size(48.dp),
                     ) {
                         if (refreshing) {
                             CircularProgressIndicator(
@@ -640,8 +726,8 @@ private fun FunCardManagerApp(active: Boolean) {
             ExtendedFloatingActionButton(
                 onClick = {
                     if (workingKey != null || refreshing) return@ExtendedFloatingActionButton
-                    replacementTarget = null
-                    fileLauncher.launch(arrayOf("application/zip", "application/octet-stream", "*/*"))
+                    replacementTargetId = null
+                    fileLauncher.launch(arrayOf("application/zip", "application/octet-stream"))
                 },
                 enabled = workingKey == null && !refreshing,
                 modifier = Modifier.semantics {
@@ -655,7 +741,10 @@ private fun FunCardManagerApp(active: Boolean) {
         },
     ) { padding ->
         LazyColumn(
-            modifier = Modifier.fillMaxSize().padding(padding),
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(padding)
+                .nestedScroll(scrollBehavior.nestedScrollConnection),
             contentPadding = PaddingValues(start = 14.dp, top = 8.dp, end = 14.dp, bottom = 100.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
@@ -689,12 +778,16 @@ private fun FunCardManagerApp(active: Boolean) {
             }
             if (initialLoading && cards.isEmpty()) {
                 item { LoadingCards() }
-            } else if (cards.isEmpty()) {
+            } else if (cards.isEmpty() && serviceReady) {
                 item {
-                    EmptyCards(onImport = {
-                        replacementTarget = null
-                        fileLauncher.launch(arrayOf("application/zip", "application/octet-stream", "*/*"))
-                    })
+                    EmptyCards(
+                        enabled = workingKey == null && !refreshing,
+                        onImport = {
+                            if (workingKey != null || refreshing) return@EmptyCards
+                            replacementTargetId = null
+                            fileLauncher.launch(arrayOf("application/zip", "application/octet-stream"))
+                        },
+                    )
                 }
             }
             items(cards, key = { it.cardId }) { card ->
@@ -712,8 +805,8 @@ private fun FunCardManagerApp(active: Boolean) {
                         }
                     },
                     onReplace = {
-                        replacementTarget = card
-                        fileLauncher.launch(arrayOf("application/zip", "application/octet-stream", "*/*"))
+                        replacementTargetId = card.cardId
+                        fileLauncher.launch(arrayOf("application/zip", "application/octet-stream"))
                     },
                     onPayload = { payloadTarget = card },
                     onDiagnostics = {
@@ -745,7 +838,7 @@ private fun FunCardManagerApp(active: Boolean) {
                 onDismiss = {
                     manager.discardImport(preview.token)
                     pendingImport = null
-                    replacementTarget = null
+                    replacementTargetId = null
                 },
                 onConfirm = { commitImport(preview, replacementTarget) },
             )
@@ -852,7 +945,7 @@ private fun LoadingCards() {
 }
 
 @Composable
-private fun EmptyCards(onImport: () -> Unit) {
+private fun EmptyCards(enabled: Boolean, onImport: () -> Unit) {
     Surface(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(24.dp),
@@ -871,7 +964,7 @@ private fun EmptyCards(onImport: () -> Unit) {
                 style = MiuixTheme.textStyles.body2,
                 color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
             )
-            Button(onClick = onImport) { Text("选择卡片文件") }
+            PrimaryButton(onClick = onImport, enabled = enabled) { Text("选择卡片文件") }
         }
     }
 }
@@ -955,6 +1048,8 @@ private fun CompactCardRow(
                         ),
                         enabled = enabled,
                         collapseOnSelection = true,
+                        minWidth = 48.dp,
+                        minHeight = 48.dp,
                     ) {
                         Icon(MiuixIcons.More, contentDescription = "管理 ${card.displayName}")
                     }
@@ -965,6 +1060,7 @@ private fun CompactCardRow(
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
+                        .heightIn(min = 48.dp)
                         .toggleable(
                             value = desiredVisible,
                             enabled = enabled,
@@ -1117,12 +1213,13 @@ private fun RiskConfirmDialog(
     onDismiss: () -> Unit,
     onConfirm: () -> Unit,
 ) {
+    var acknowledged by remember(preview.token) { mutableStateOf(false) }
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(if (replacing) "确认替换" else "确认导入") },
         text = {
             Column(
-                modifier = Modifier.verticalScroll(rememberScrollState()),
+                modifier = Modifier.heightIn(max = 420.dp).verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
                 Text(preview.suggestedName, style = MiuixTheme.textStyles.headline2, fontWeight = FontWeight.SemiBold)
@@ -1136,35 +1233,54 @@ private fun RiskConfirmDialog(
                     style = MiuixTheme.textStyles.footnote2,
                     color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
                 )
+                Text(
+                    "SHA-256  ${preview.sha256}",
+                    style = MiuixTheme.textStyles.footnote2,
+                    color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                )
                 Surface(
                     color = MiuixTheme.colorScheme.errorContainer,
                     contentColor = MiuixTheme.colorScheme.onErrorContainer,
                     shape = RoundedCornerShape(14.dp),
                 ) {
                     Text(
-                        "此卡片包含可调用外部功能的命令。请仅导入来源可信、内容已确认的文件。",
+                        "此卡片包含外部功能调用，或存在未能完整扫描的附属文件。请仅导入来源可信、内容已确认的文件。",
                         modifier = Modifier.padding(12.dp),
                         style = MiuixTheme.textStyles.footnote2,
                     )
                 }
-                preview.findings.take(8).forEach { finding ->
+                preview.findings.forEach { finding ->
                     Text(
-                        "${finding.type}: ${finding.detail}",
+                        "${safeExternalText(finding.type, 48)}: ${safeExternalText(finding.detail, 240)}",
                         style = MiuixTheme.textStyles.footnote2,
                         color = MiuixTheme.colorScheme.error,
                     )
                 }
-                if (preview.findings.size > 8) {
-                    Text(
-                        "另有 ${preview.findings.size - 8} 项未显示",
-                        style = MiuixTheme.textStyles.footnote2,
-                        color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(min = 48.dp)
+                        .toggleable(
+                            value = acknowledged,
+                            role = Role.Checkbox,
+                            onValueChange = { acknowledged = it },
+                        ),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Checkbox(
+                        checked = acknowledged,
+                        onCheckedChange = null,
+                        modifier = Modifier.clearAndSetSemantics { },
                     )
+                    Spacer(Modifier.width(8.dp))
+                    Text("我已核对来源与上述全部风险")
                 }
             }
         },
         confirmButton = {
-            TextButton(onClick = onConfirm) { Text(if (replacing) "仍要替换" else "仍要导入") }
+            TextButton(onClick = onConfirm, enabled = acknowledged) {
+                Text(if (replacing) "仍要替换" else "仍要导入")
+            }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } },
     )
@@ -1180,6 +1296,14 @@ private fun PayloadEditorDialog(
     var config by remember(card.cardId) { mutableStateOf(card.mamlConfigJson) }
     var rear by remember(card.cardId) { mutableStateOf(card.advancedRearParamJson.orEmpty()) }
     var focus by remember(card.cardId) { mutableStateOf(card.advancedFocusParamJson.orEmpty()) }
+    val configError = remember(config) { jsonObjectError(config) }
+    val rearError = remember(rear) { jsonObjectError(rear) }
+    val focusError = remember(focus) { jsonObjectError(focus) }
+    val payloadBytes = remember(advanced, config, rear, focus) {
+        if (advanced) rear.toByteArray().size + focus.toByteArray().size else config.toByteArray().size
+    }
+    val canSave = payloadBytes <= 128 * 1024 &&
+        if (advanced) rearError == null && focusError == null else configError == null
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("卡片参数") },
@@ -1188,8 +1312,22 @@ private fun PayloadEditorDialog(
                 modifier = Modifier.fillMaxWidth().verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Checkbox(checked = advanced, onCheckedChange = { advanced = it })
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(min = 56.dp)
+                        .toggleable(
+                            value = advanced,
+                            role = Role.Checkbox,
+                            onValueChange = { advanced = it },
+                        ),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Checkbox(
+                        checked = advanced,
+                        onCheckedChange = null,
+                        modifier = Modifier.clearAndSetSemantics { },
+                    )
                     Column {
                         Text("高级模式")
                         Text(
@@ -1206,6 +1344,8 @@ private fun PayloadEditorDialog(
                         label = "背屏参数（miui.rear.param）",
                         minLines = 4,
                         modifier = Modifier.fillMaxWidth(),
+                        supportingText = rearError?.let { message -> { Text(message) } },
+                        isError = rearError != null,
                     )
                     OutlinedTextField(
                         focus,
@@ -1213,6 +1353,8 @@ private fun PayloadEditorDialog(
                         label = "焦点参数（miui.focus.param）",
                         minLines = 4,
                         modifier = Modifier.fillMaxWidth(),
+                        supportingText = focusError?.let { message -> { Text(message) } },
+                        isError = focusError != null,
                     )
                 } else {
                     OutlinedTextField(
@@ -1221,12 +1363,24 @@ private fun PayloadEditorDialog(
                         label = "卡片配置（maml_config）",
                         minLines = 8,
                         modifier = Modifier.fillMaxWidth(),
+                        supportingText = configError?.let { message -> { Text(message) } },
+                        isError = configError != null,
+                    )
+                }
+                if (payloadBytes > 128 * 1024) {
+                    Text(
+                        "Payload 超过 128 KB，请缩短内容",
+                        color = MiuixTheme.colorScheme.error,
+                        style = MiuixTheme.textStyles.footnote2,
                     )
                 }
             }
         },
         confirmButton = {
-            TextButton(onClick = { onSave(advanced, config, rear, focus) }) { Text("保存") }
+            TextButton(
+                onClick = { onSave(advanced, config, rear, focus) },
+                enabled = canSave,
+            ) { Text("保存") }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } },
     )
@@ -1280,6 +1434,24 @@ private fun DiagnosticLine(label: String, value: String) {
 }
 
 private fun diagnosticState(ready: Boolean): String = if (ready) "正常" else "未就绪"
+
+private fun jsonObjectError(value: String): String? = runCatching {
+    JSONObject(value.ifBlank { "{}" })
+}.exceptionOrNull()?.let { "请输入有效的 JSON 对象" }
+
+private fun safeExternalText(value: String, maxCodePoints: Int): String {
+    val bidiControls = setOf(
+        '\u061c', '\u200e', '\u200f', '\u202a', '\u202b', '\u202c', '\u202d', '\u202e',
+        '\u2066', '\u2067', '\u2068', '\u2069',
+    )
+    val normalized = value
+        .filterNot { it.isISOControl() || it in bidiControls }
+        .replace(Regex("\\s+"), " ")
+        .trim()
+    if (normalized.isEmpty()) return "未声明"
+    val count = normalized.codePointCount(0, normalized.length).coerceAtMost(maxCodePoints)
+    return normalized.substring(0, normalized.offsetByCodePoints(0, count))
+}
 
 private fun formatFileSize(bytes: Long): String = when {
     bytes >= 1024L * 1024L -> "${bytes / (1024L * 1024L)} MB"

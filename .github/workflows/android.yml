@@ -9,32 +9,55 @@ on:
 permissions:
   contents: read
 
+env:
+  REAREYE_COMMIT: 310cdfdbecea752a2f090cec71a3064a4a542d53
+  REAREYE_TRANSLATIONS_COMMIT: d845ae6bb8a0dc8f9a9794fc0d36377b4ba97902
+
 jobs:
   build:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-java@v4
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+      - uses: actions/setup-java@dd06d9cba3e5552c54d9f8ea23572deb30010f7c # v6.0.0
         with:
           distribution: temurin
           java-version: "17"
           cache: gradle
-      - uses: android-actions/setup-android@v3
-      - name: Install Android SDK 36
-        run: sdkmanager "platforms;android-36" "build-tools;36.0.0"
+      - uses: android-actions/setup-android@40fd30fb8d7440372e1316f5d1809ec01dcd3699 # v4.0.1
+      - name: Install Android SDK 37
+        run: sdkmanager "platforms;android-37" "build-tools;36.0.0"
       - name: Verify Hello Card package
         run: python demo/hello-card/build_card.py --check
       - name: Audit REAREye source separation
         run: |
-          git clone --filter=blob:none https://github.com/killerprojecte/REAREye.git .audit/REAREye
-          python tools/audit_reareye_similarity.py --reareye .audit/REAREye
-      - name: Test and build
-        run: ./gradlew :core:testDebugUnitTest :app:assembleDebug --stacktrace
+          set -euo pipefail
+          reareye_dir="$RUNNER_TEMP/REAREye"
+          git clone --no-checkout https://github.com/killerprojecte/REAREye.git "$reareye_dir"
+          git -C "$reareye_dir" fetch --no-tags origin \
+            "$REAREYE_COMMIT" "$REAREYE_TRANSLATIONS_COMMIT"
+          git -C "$reareye_dir" checkout --detach "$REAREYE_COMMIT"
+          git -C "$reareye_dir" remote remove origin
+          git -C "$reareye_dir" for-each-ref --format='delete %(refname)' refs/heads refs/tags |
+            git -C "$reareye_dir" update-ref --stdin
+          git -C "$reareye_dir" update-ref refs/heads/audit-baseline "$REAREYE_COMMIT"
+          git -C "$reareye_dir" update-ref refs/heads/audit-translations "$REAREYE_TRANSLATIONS_COMMIT"
+          test "$(git -C "$reareye_dir" rev-parse HEAD)" = "$REAREYE_COMMIT"
+          test "$(git -C "$reareye_dir" rev-parse refs/heads/audit-translations)" = "$REAREYE_TRANSLATIONS_COMMIT"
+          python tools/audit_reareye_similarity.py --reareye "$reareye_dir"
+      - name: Unit tests, lint, and debug/release builds
+        run: |
+          ./gradlew \
+            :core:test :app:test \
+            :core:lintDebug :core:lintRelease \
+            :app:lintDebug :app:lintRelease \
+            :core:assembleDebug :core:assembleRelease \
+            :app:assembleDebug :app:assembleRelease \
+            --stacktrace
       - name: Audit runtime dependency licenses
         shell: pwsh
         run: ./tools/verify-runtime-licenses.ps1 -GradleExecutable ./gradlew
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: OuterView-debug
           path: app/build/outputs/apk/debug/app-debug.apk

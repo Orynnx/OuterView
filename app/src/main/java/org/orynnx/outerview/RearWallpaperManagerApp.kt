@@ -1,7 +1,11 @@
 package org.orynnx.outerview
 
+import android.content.Context
+import android.net.Uri
 import android.os.Bundle
-import android.provider.OpenableColumns
+import android.os.CancellationSignal
+import android.os.ParcelFileDescriptor
+import android.util.Log
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.animateContentSize
@@ -24,6 +28,7 @@ import top.yukonga.miuix.kmp.basic.DropdownItem
 import top.yukonga.miuix.kmp.basic.HorizontalDivider
 import top.yukonga.miuix.kmp.basic.Icon
 import top.yukonga.miuix.kmp.basic.IconButton
+import top.yukonga.miuix.kmp.basic.MiuixScrollBehavior
 import top.yukonga.miuix.kmp.basic.Scaffold
 import top.yukonga.miuix.kmp.basic.SnackbarHost
 import top.yukonga.miuix.kmp.basic.SnackbarHostState
@@ -50,6 +55,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.disabled
@@ -58,20 +64,41 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import org.orynnx.outerview.core.internal.BoundedDeadlineCopy
+import org.orynnx.outerview.core.internal.RearWallpaperPackageValidator
 import org.orynnx.outerview.core.wallpaperapi.RearWallpaperHostClient
 import org.orynnx.outerview.core.wallpaperapi.RearWallpaperHostContract
 import org.orynnx.outerview.core.wallpaperapi.RearWallpaperHostInfo
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import java.io.File
+import java.io.FileOutputStream
+import java.io.IOException
+import java.io.InterruptedIOException
+import java.nio.file.Files
+import java.nio.file.LinkOption
+import java.util.Locale
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicReference
+
+private const val WallpaperImportTimeoutSeconds = 15L
+private const val WallpaperImportStaleAgeHours = 24L
+private const val WallpaperImportCacheDirectory = "wallpaper-import"
+private const val WallpaperImportTempPrefix = "pending_wallpaper_"
+private const val WallpaperImportLogTag = "OuterView-Wallpaper"
 
 @Composable
-fun RearWallpaperManagerApp(active: Boolean = true) {
+fun RearWallpaperManagerApp(active: Boolean = true, resumeTick: Int = 1) {
     val context = LocalContext.current
     val appContext = context.applicationContext
     val scope = rememberCoroutineScope()
+    val scrollBehavior = MiuixScrollBehavior()
+    val refreshMutex = remember { Mutex() }
     val client = remember { RearWallpaperHostClient() }
     val snackbar = remember { SnackbarHostState() }
 
@@ -95,32 +122,33 @@ fun RearWallpaperManagerApp(active: Boolean = true) {
     }
 
     suspend fun refresh(userInitiated: Boolean = false) {
-        if (refreshing) return
-        refreshing = true
-        try {
-            val refreshedEntries = withContext(Dispatchers.IO) {
-                check(client.connect(appContext)) { "未连接到背屏服务，请确认模块已启用并重启背屏中心" }
-                client.list()
-                    .asSequence()
-                    .filter { it.managed }
-                    .sortedWith(
-                        compareByDescending<RearWallpaperHostInfo> { it.current }
-                            .thenBy { it.name.lowercase() },
-                    )
-                    .toList()
+        refreshMutex.withLock {
+            refreshing = true
+            try {
+                val refreshedEntries = withContext(Dispatchers.IO) {
+                    check(client.connect(appContext)) { "未连接到背屏服务，请确认模块已启用并重启背屏中心" }
+                    client.list()
+                        .asSequence()
+                        .filter { it.managed }
+                        .sortedWith(
+                            compareByDescending<RearWallpaperHostInfo> { it.current }
+                                .thenBy { it.name.lowercase(Locale.ROOT) },
+                        )
+                        .toList()
+                }
+                entries = refreshedEntries
+                loadError = null
+                if (userInitiated) showMessage("壁纸列表已刷新")
+                initialLoading = false
+            } catch (error: Throwable) {
+                if (error is CancellationException) throw error
+                val message = error.message?.takeIf(String::isNotBlank) ?: "无法读取背屏壁纸列表"
+                loadError = message
+                if (userInitiated) showMessage(message)
+                initialLoading = false
+            } finally {
+                refreshing = false
             }
-            entries = refreshedEntries
-            loadError = null
-            if (userInitiated) showMessage("壁纸列表已刷新")
-            initialLoading = false
-        } catch (error: Throwable) {
-            if (error is CancellationException) throw error
-            val message = error.message?.takeIf(String::isNotBlank) ?: "无法读取背屏壁纸列表"
-            loadError = message
-            if (userInitiated) showMessage(message)
-            initialLoading = false
-        } finally {
-            refreshing = false
         }
     }
 
@@ -164,34 +192,43 @@ fun RearWallpaperManagerApp(active: Boolean = true) {
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri == null) return@rememberLauncherForActivityResult
         runAction(actionName = "导入壁纸") {
-            val resolver = appContext.contentResolver
-            val displayName = resolver.query(
-                uri,
-                arrayOf(OpenableColumns.DISPLAY_NAME),
-                null,
-                null,
-                null,
-            )?.use { cursor ->
-                val column = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
-                if (column >= 0 && cursor.moveToFirst()) cursor.getString(column) else null
-            }.orEmpty().ifBlank { "wallpaper.mrc" }
-            val descriptor = requireNotNull(resolver.openFileDescriptor(uri, "r")) {
-                "无法读取所选壁纸文件"
+            // A display name is not worth another unbounded provider IPC. The
+            // decoded URI segment is only advisory and is sanitized locally.
+            val displayName = wallpaperImportDisplayName(uri)
+            val stagedFile = stageWallpaperImport(appContext, uri)
+            try {
+                val descriptor = ParcelFileDescriptor.open(stagedFile, ParcelFileDescriptor.MODE_READ_ONLY)
+                var importFailure: Throwable? = null
+                try {
+                    client.import(descriptor, displayName)
+                } catch (error: Throwable) {
+                    importFailure = error
+                    throw error
+                } finally {
+                    runCatching { descriptor.close() }.onFailure { closeFailure ->
+                        val primary = importFailure
+                        if (primary == null) {
+                            Log.w(WallpaperImportLogTag, "Unable to close staged wallpaper descriptor", closeFailure)
+                        } else {
+                            primary.addSuppressed(closeFailure)
+                        }
+                    }
+                }
+            } finally {
+                // A cache cleanup failure must not turn a committed Host import
+                // into a false failure. The next import retries stale cleanup.
+                deleteWallpaperImportTemp(stagedFile)
             }
-            descriptor.use { client.import(it, displayName) }
         }
     }
     val openPicker = {
         if (!busy && !refreshing && !initialLoading) {
-            picker.launch(arrayOf("application/zip", "application/octet-stream", "*/*"))
+            picker.launch(arrayOf("application/zip", "application/x-zip-compressed", "application/octet-stream"))
         }
     }
 
-    LaunchedEffect(active) {
-        if (active) {
-            // If the previous page activation is still leaving a blocking host
-            // call, wait for its finally block and then perform this refresh.
-            while (refreshing) delay(50L)
+    LaunchedEffect(active, resumeTick) {
+        if (active && resumeTick > 0) {
             refresh()
         }
     }
@@ -201,10 +238,12 @@ fun RearWallpaperManagerApp(active: Boolean = true) {
         topBar = {
             TopAppBar(
                 title = "背屏壁纸",
+                scrollBehavior = scrollBehavior,
                 actions = {
                     IconButton(
                         onClick = { scope.launch { refresh(userInitiated = true) } },
                         enabled = controlsEnabled,
+                        modifier = Modifier.size(48.dp),
                     ) {
                         if (refreshing) {
                             CircularProgressIndicator(
@@ -250,7 +289,8 @@ fun RearWallpaperManagerApp(active: Boolean = true) {
             Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    .padding(padding),
+                    .padding(padding)
+                    .nestedScroll(scrollBehavior.nestedScrollConnection),
                 contentAlignment = Alignment.Center,
             ) {
                 Column(
@@ -273,7 +313,8 @@ fun RearWallpaperManagerApp(active: Boolean = true) {
             LazyColumn(
                 modifier = Modifier
                     .fillMaxSize()
-                    .padding(padding),
+                    .padding(padding)
+                    .nestedScroll(scrollBehavior.nestedScrollConnection),
                 contentPadding = PaddingValues(start = 16.dp, top = 12.dp, end = 16.dp, bottom = 104.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
@@ -330,7 +371,10 @@ fun RearWallpaperManagerApp(active: Boolean = true) {
     if (active) {
         renameTarget?.let { item ->
             val normalizedName = renameName.trim()
-            val canSave = normalizedName.isNotEmpty() && normalizedName != item.name && !busy
+            val nameCodePoints = normalizedName.codePointCount(0, normalizedName.length)
+            val nameHasInvalidCharacters = normalizedName.any(::isUnsafeWallpaperNameCharacter)
+            val canSave = nameCodePoints in 1..48 && !nameHasInvalidCharacters &&
+                normalizedName != item.name && !busy
             AlertDialog(
             onDismissRequest = { if (!busy) renameTarget = null },
             icon = { Icon(MiuixIcons.Edit, contentDescription = null) },
@@ -338,14 +382,20 @@ fun RearWallpaperManagerApp(active: Boolean = true) {
             text = {
                 OutlinedTextField(
                     value = renameName,
-                    onValueChange = { renameName = it.take(48) },
+                    onValueChange = { renameName = it.takeWallpaperNameCodePoints(48) },
                     modifier = Modifier.fillMaxWidth(),
                     singleLine = true,
                     label = "名称",
                     supportingText = {
-                        Text(if (renameName.isBlank()) "名称不能为空" else "${renameName.length}/48")
+                        Text(
+                            when {
+                                renameName.isBlank() -> "名称不能为空"
+                                nameHasInvalidCharacters -> "名称包含不可见控制字符"
+                                else -> "$nameCodePoints/48"
+                            },
+                        )
                     },
-                    isError = renameName.isBlank(),
+                    isError = nameCodePoints !in 1..48 || nameHasInvalidCharacters,
                 )
             },
             confirmButton = {
@@ -383,7 +433,7 @@ fun RearWallpaperManagerApp(active: Boolean = true) {
             text = {
                 Text(
                     if (item.current) {
-                        "这是当前正在使用的壁纸。OuterView 会先让背屏切离它，再从运行时和管理目录中移除；此操作无法撤销。"
+                        "这是当前正在使用的壁纸。请先应用另一张壁纸，再删除它。"
                     } else {
                         "将从背屏运行时和 OuterView 管理目录中移除这张壁纸；此操作无法撤销。"
                     },
@@ -517,6 +567,8 @@ private fun WallpaperCard(
                     ),
                     enabled = enabled,
                     collapseOnSelection = true,
+                    minWidth = 48.dp,
+                    minHeight = 48.dp,
                 ) {
                     Icon(
                         MiuixIcons.More,
@@ -664,4 +716,155 @@ private fun WallpaperEmptyState(
             Text("导入第一张壁纸", modifier = Modifier.padding(start = 8.dp))
         }
     }
+}
+
+private fun String.takeWallpaperNameCodePoints(maxCodePoints: Int): String {
+    val count = codePointCount(0, length).coerceAtMost(maxCodePoints)
+    return substring(0, offsetByCodePoints(0, count))
+}
+
+private fun isUnsafeWallpaperNameCharacter(character: Char): Boolean =
+    character.isISOControl() || character in '\u202a'..'\u202e' ||
+        character in '\u2066'..'\u2069' || character == '\u200e' ||
+        character == '\u200f' || character == '\u061c'
+
+private fun stageWallpaperImport(context: Context, uri: Uri): File {
+    val importCache = wallpaperImportCache(context)
+    val stagedFile = File.createTempFile(WallpaperImportTempPrefix, ".mrc", importCache)
+    try {
+        require(
+            stagedFile.absoluteFile.parentFile == importCache.absoluteFile &&
+                Files.isRegularFile(stagedFile.toPath(), LinkOption.NOFOLLOW_LINKS),
+        ) { "壁纸缓存临时文件无效" }
+        val timeoutNanos = TimeUnit.SECONDS.toNanos(WallpaperImportTimeoutSeconds)
+        val cancellationSignal = CancellationSignal()
+        val abortRequested = AtomicBoolean(false)
+        val descriptorRef = AtomicReference<ParcelFileDescriptor?>()
+        FileOutputStream(stagedFile, false).use { output ->
+            val copied = try {
+                BoundedDeadlineCopy.runWithSupervisor(
+                    timeoutNanos = timeoutNanos,
+                    // This callback runs on the supervising Dispatchers.IO thread,
+                    // not the worker blocked in provider open/read. The flag closes
+                    // the race where timeout happens just before the PFD is published.
+                    closeSource = {
+                        abortRequested.set(true)
+                        val closeFailure = runCatching { descriptorRef.getAndSet(null)?.close() }
+                            .exceptionOrNull()
+                        runCatching { cancellationSignal.cancel() }
+                            .onFailure { cancelFailure ->
+                                if (closeFailure == null) throw cancelFailure
+                                closeFailure.addSuppressed(cancelFailure)
+                            }
+                        if (closeFailure != null) throw closeFailure
+                    },
+                ) {
+                    val descriptor = requireNotNull(
+                        context.contentResolver.openFileDescriptor(uri, "r", cancellationSignal),
+                    ) { "无法读取所选壁纸文件" }
+                    descriptorRef.set(descriptor)
+                    if (abortRequested.get()) {
+                        descriptorRef.compareAndSet(descriptor, null)
+                        runCatching { descriptor.close() }
+                        throw InterruptedIOException("wallpaper import was cancelled")
+                    }
+                    try {
+                        ParcelFileDescriptor.AutoCloseInputStream(descriptor).use { input ->
+                            BoundedDeadlineCopy.copy(
+                                input = input,
+                                output = output,
+                                maxBytes = RearWallpaperPackageValidator.MaxCompressedBytes,
+                                timeoutNanos = timeoutNanos,
+                            )
+                        }
+                    } finally {
+                        descriptorRef.compareAndSet(descriptor, null)
+                        runCatching { descriptor.close() }
+                    }
+                }
+            } catch (error: BoundedDeadlineCopy.DeadlineExceededException) {
+                throw IOException("读取壁纸超时（${WallpaperImportTimeoutSeconds} 秒）", error)
+            } catch (error: BoundedDeadlineCopy.LimitExceededException) {
+                throw IOException("壁纸文件超过 32 MB", error)
+            }
+            require(copied > 0L) { "壁纸文件不能为空" }
+            output.fd.sync()
+        }
+
+        val stagedPath = stagedFile.toPath()
+        require(Files.isRegularFile(stagedPath, LinkOption.NOFOLLOW_LINKS)) {
+            "壁纸缓存不是常规文件"
+        }
+        require(stagedFile.length() in 1L..RearWallpaperPackageValidator.MaxCompressedBytes) {
+            "壁纸缓存大小无效"
+        }
+        // Reject malformed/expansion-heavy packages in the app process before
+        // spending the privileged Host's Binder thread CPU. Host validates again.
+        RearWallpaperPackageValidator.inspect(stagedFile)
+        return stagedFile
+    } catch (error: Throwable) {
+        runCatching { deleteWallpaperImportTempStrict(stagedFile) }.onFailure(error::addSuppressed)
+        throw error
+    }
+}
+
+private fun wallpaperImportCache(context: Context): File {
+    val cacheRoot = context.cacheDir.absoluteFile
+    require(cacheRoot.isDirectory && !Files.isSymbolicLink(cacheRoot.toPath())) {
+        "应用缓存目录无效"
+    }
+    val importCache = File(cacheRoot, WallpaperImportCacheDirectory).absoluteFile
+    require(importCache.parentFile == cacheRoot) { "壁纸缓存路径无效" }
+    if (!importCache.exists()) check(importCache.mkdir()) { "无法创建壁纸缓存目录" }
+    require(importCache.isDirectory && !Files.isSymbolicLink(importCache.toPath())) {
+        "壁纸缓存目录无效"
+    }
+    require(importCache.canonicalFile.parentFile == cacheRoot.canonicalFile) {
+        "壁纸缓存目录越界"
+    }
+
+    val staleBefore = System.currentTimeMillis() - TimeUnit.HOURS.toMillis(WallpaperImportStaleAgeHours)
+    importCache.listFiles().orEmpty()
+        .filter {
+            it.name.startsWith(WallpaperImportTempPrefix) &&
+                (Files.isSymbolicLink(it.toPath()) ||
+                    Files.isRegularFile(it.toPath(), LinkOption.NOFOLLOW_LINKS)) &&
+                runCatching {
+                    Files.getLastModifiedTime(it.toPath(), LinkOption.NOFOLLOW_LINKS).toMillis() <= staleBefore
+                }.getOrDefault(false)
+        }
+        .forEach(::deleteWallpaperImportTemp)
+    return importCache
+}
+
+private fun deleteWallpaperImportTemp(file: File) {
+    runCatching { deleteWallpaperImportTempStrict(file) }
+        .onFailure { Log.w(WallpaperImportLogTag, "Unable to delete staged wallpaper ${file.name}", it) }
+}
+
+private fun deleteWallpaperImportTempStrict(file: File) {
+    val parent = requireNotNull(file.absoluteFile.parentFile) { "壁纸缓存父目录缺失" }
+    require(parent.name == WallpaperImportCacheDirectory) { "拒绝清理非壁纸缓存文件" }
+    require(file.name.startsWith(WallpaperImportTempPrefix)) { "拒绝清理非壁纸临时文件" }
+    require(!Files.isSymbolicLink(parent.toPath()) && parent.isDirectory) { "壁纸缓存目录无效" }
+    require(file.absoluteFile.parentFile == parent.absoluteFile) { "壁纸临时文件越界" }
+    if (Files.isSymbolicLink(file.toPath()) || file.isFile) {
+        Files.deleteIfExists(file.toPath())
+    } else {
+        require(!file.exists()) { "拒绝递归清理壁纸缓存目录" }
+    }
+}
+
+private fun wallpaperImportDisplayName(uri: Uri): String {
+    val candidate = uri.lastPathSegment
+        .orEmpty()
+        .take(512)
+        .substringAfterLast('/')
+        .substringAfterLast(':')
+        .filterNot(::isUnsafeWallpaperNameCharacter)
+        .trim()
+        .takeWallpaperNameCodePoints(256)
+    return candidate.takeIf {
+        it.endsWith(".mrc", ignoreCase = true) || it.endsWith(".zip", ignoreCase = true)
+    } ?: "wallpaper.mrc"
 }

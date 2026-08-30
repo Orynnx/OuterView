@@ -1,5 +1,9 @@
 # OuterView 2.2.0
 
+> 历史发布公告存档。当次代码变更的权威清单见根目录 [CHANGELOG.md](../CHANGELOG.md)。
+> 文中提及的 Dino Run Demo 及其素材声明仅适用于该版本；相关媒体已自 2.3.2 起移除，
+> 当前许可证与来源边界以 [LICENSE_TRANSITION.md](LICENSE_TRANSITION.md) 为准。
+
 首个独立开源版本。
 
 ## 功能

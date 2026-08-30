@@ -10,6 +10,7 @@ import org.orynnx.outerview.core.internal.FunCardNotificationController
 import org.orynnx.outerview.core.internal.FunCardRepository
 import org.orynnx.outerview.core.internal.PendingCardImport
 import org.orynnx.outerview.core.internal.RearCardWorkflow
+import org.orynnx.outerview.core.internal.SmartAssistantTemplateValidator
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import java.util.UUID
@@ -23,6 +24,9 @@ class RearCardManager private constructor(context: Context) : RearCardManagement
         const val API_VERSION = 5
         private const val MigrationPrefs = "rear_card_core_migrations"
         private const val LegacyProbeCleanupKey = "legacy_system_probes_cleaned_v2"
+        private const val MaxPendingImports = 4
+        private const val MaxPendingImportBytes = 64L * 1024L * 1024L
+        private const val PendingImportSessionMs = 30L * 60L * 1000L
         private val operationMutex = Mutex()
 
         @JvmStatic
@@ -32,11 +36,10 @@ class RearCardManager private constructor(context: Context) : RearCardManagement
     override suspend fun refresh(): RearCardManagerSnapshot = operationMutex.withLock {
         runCatching {
             cleanupLegacySystemProbesOnce()
-            val cards = FunCardRepository.loadCards(appContext).map(CustomCardRecord::toPublic)
-            val capabilities = FunCardRepository.capabilities(appContext).toPublic()
+            val repositoryRefresh = FunCardRepository.refresh(appContext)
             RearCardManagerSnapshot(
-                capabilities = capabilities,
-                cards = cards,
+                capabilities = repositoryRefresh.capabilities.toPublic(),
+                cards = repositoryRefresh.cards.map(CustomCardRecord::toPublic),
                 hasLegacyArtifacts = FunCardRepository.hasLegacyRegistry(appContext),
             )
         }.getOrElse {
@@ -52,50 +55,62 @@ class RearCardManager private constructor(context: Context) : RearCardManagement
     ): EndpointResult<CardImportPreview> {
         return FunCardRepository.inspectImport(appContext, uri, displayNameHint).fold(
             onSuccess = { pending ->
-                val token = UUID.randomUUID().toString()
-                pendingImports[token] = pending
-                EndpointResult(true, pending.toPublic(token), "模板校验通过")
+                runCatching {
+                    val token = storePendingImport(pending)
+                    EndpointResult(true, pending.toPublic(token), "模板校验通过")
+                }.getOrElse { error ->
+                    runCatching { discardPendingFile(pending) }
+                    EndpointResult(false, message = error.message ?: "无法保存导入会话", errorCode = "IMPORT_SESSION_FAILED")
+                }
             },
             onFailure = { EndpointResult(false, message = it.message ?: "模板校验失败", errorCode = "IMPORT_INVALID") },
         )
     }
 
     override fun discardImport(token: String) {
-        pendingImports.remove(token)?.stagedFile?.delete()
+        synchronized(pendingImports) { pendingImports.remove(token) }
+            ?.let { pending -> runCatching { discardPendingFile(pending) } }
     }
 
     override suspend fun importAndInstall(token: String): RearCardActionResult = operationMutex.withLock {
-        val pending = pendingImports.remove(token)
+        val pending = takePendingImport(token)
             ?: return@withLock failure("导入会话已失效，请重新选择 ZIP", "IMPORT_TOKEN_EXPIRED")
         val hashes = FunCardRepository.listSystemTemplates(appContext)
             .mapNotNull { it.sha256.takeIf(String::isNotBlank) }
             .toSet()
-        runCatching {
-            RearCardWorkflow.importAndInstall(
-                commit = { FunCardRepository.commitImport(appContext, pending, hashes) },
-                install = { FunCardRepository.installCard(appContext, it) },
-            ).toPublic()
-        }.getOrElse { failure(it.message ?: "导入安装失败", "IMPORT_INSTALL_FAILED") }
+        try {
+            runCatching {
+                RearCardWorkflow.importAndInstall(
+                    commit = { FunCardRepository.commitImport(appContext, pending, hashes) },
+                    install = { FunCardRepository.installCard(appContext, it) },
+                ).toPublic()
+            }.getOrElse { failure(it.message ?: "导入安装失败", "IMPORT_INSTALL_FAILED") }
+        } finally {
+            runCatching { discardPendingFile(pending) }
+        }
     }
 
     override suspend fun replaceAndInstall(cardId: String, token: String): RearCardActionResult = operationMutex.withLock {
-        val pending = pendingImports.remove(token)
+        val pending = takePendingImport(token)
             ?: return@withLock failure("导入会话已失效，请重新选择 ZIP", "IMPORT_TOKEN_EXPIRED")
-        runCatching {
-            val systemHashes = FunCardRepository.listSystemTemplates(appContext)
-                .mapNotNull { it.sha256.takeIf(String::isNotBlank) }
-                .toSet()
-            if (pending.inspection.sha256 in systemHashes) {
-                pending.stagedFile.delete()
-                return@runCatching failure("系统已经提供相同模板，不重复添加", "SYSTEM_TEMPLATE_DUPLICATE")
-            }
-            RearCardWorkflow.replaceAndInstall(
-                initial = requireCard(cardId),
-                hide = { FunCardRepository.hideCard(appContext, it) },
-                replace = { FunCardRepository.replaceTemplate(appContext, it, pending) },
-                install = { FunCardRepository.installCard(appContext, it) },
-            ).toPublic()
-        }.getOrElse { failure(it.message ?: "替换安装失败", "REPLACE_INSTALL_FAILED") }
+        try {
+            runCatching {
+                val systemHashes = FunCardRepository.listSystemTemplates(appContext)
+                    .mapNotNull { it.sha256.takeIf(String::isNotBlank) }
+                    .toSet()
+                if (pending.inspection.sha256 in systemHashes) {
+                    return@runCatching failure("系统已经提供相同模板，不重复添加", "SYSTEM_TEMPLATE_DUPLICATE")
+                }
+                RearCardWorkflow.replaceAndInstall(
+                    initial = requireCard(cardId),
+                    hide = { FunCardRepository.hideCard(appContext, it) },
+                    replace = { FunCardRepository.replaceTemplate(appContext, it, pending) },
+                    install = { FunCardRepository.installCard(appContext, it) },
+                ).toPublic()
+            }.getOrElse { failure(it.message ?: "替换安装失败", "REPLACE_INSTALL_FAILED") }
+        } finally {
+            runCatching { discardPendingFile(pending) }
+        }
     }
 
     override suspend fun retryInstall(cardId: String): RearCardActionResult =
@@ -135,6 +150,59 @@ class RearCardManager private constructor(context: Context) : RearCardManagement
         EndpointResult(true, FunCardRepository.diagnostics(appContext, card).toPublic(), "诊断已刷新")
     }.getOrElse {
         EndpointResult(false, message = it.message ?: "诊断失败", errorCode = "DIAGNOSTICS_FAILED")
+    }
+
+    private fun storePendingImport(pending: PendingCardImport): String = synchronized(pendingImports) {
+        val now = System.currentTimeMillis()
+        prunePendingImportsLocked(now)
+        val stagedBytes = pending.stagedFile.length()
+        require(
+            pending.stagedFile.isFile &&
+                stagedBytes in 1..SmartAssistantTemplateValidator.MaxCompressedBytes,
+        ) { "导入缓存文件大小无效" }
+        while (
+            pendingImports.size >= MaxPendingImports ||
+            pendingImports.values.sumOf { it.stagedFile.length() } + stagedBytes > MaxPendingImportBytes
+        ) {
+            val oldest = pendingImports.entries.minByOrNull { it.value.stagedFile.lastModified() }
+                ?: break
+            pendingImports.remove(oldest.key)?.let { evicted -> runCatching { discardPendingFile(evicted) } }
+        }
+        require(pendingImports.size < MaxPendingImports) { "待确认导入过多，请先完成或取消已有导入" }
+        require(pendingImports.values.sumOf { it.stagedFile.length() } + stagedBytes <= MaxPendingImportBytes) {
+            "导入缓存总量超过 64 MB"
+        }
+        UUID.randomUUID().toString().also { token -> pendingImports[token] = pending }
+    }
+
+    private fun takePendingImport(token: String): PendingCardImport? {
+        val pending = synchronized(pendingImports) { pendingImports.remove(token) } ?: return null
+        val age = System.currentTimeMillis() - pending.stagedFile.lastModified()
+        val valid = pending.stagedFile.isFile &&
+            pending.stagedFile.length() in 1..SmartAssistantTemplateValidator.MaxCompressedBytes &&
+            age in 0..PendingImportSessionMs
+        if (!valid) {
+            runCatching { discardPendingFile(pending) }
+            return null
+        }
+        return pending
+    }
+
+    private fun prunePendingImportsLocked(now: Long) {
+        pendingImports.entries.toList().forEach { (token, pending) ->
+            val age = now - pending.stagedFile.lastModified()
+            if (
+                !pending.stagedFile.isFile ||
+                pending.stagedFile.length() !in 1..SmartAssistantTemplateValidator.MaxCompressedBytes ||
+                age !in 0..PendingImportSessionMs
+            ) {
+                pendingImports.remove(token)?.let { stale -> runCatching { discardPendingFile(stale) } }
+            }
+        }
+    }
+
+    private fun discardPendingFile(pending: PendingCardImport) {
+        FunCardRepository.discardPendingImport(appContext, pending)
     }
 
     private fun cleanupLegacySystemProbesOnce() {

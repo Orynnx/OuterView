@@ -85,7 +85,7 @@ cards.deleteAllCards()
 约束：
 
 - 导入和替换成功后会自动安装，但默认不显示。
-- 显示由 Host API v3 直接调用小米 Smart Assistant 原生运行管线，不发布 Android 通知。
+- 显示由 Assistant Host API v5 直接调用小米 Smart Assistant 原生运行管线，不发布 Android 通知。
 - 宿主模板被系统清理时，显示操作会用本地 ZIP 自动重新部署。
 - 隐藏只移除宿主 runtime，不删除模板。
 - 删除会自动隐藏，随后清理宿主模板、宿主 registry、本地 ZIP 和本地 registry。

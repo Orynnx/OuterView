@@ -8,19 +8,17 @@ object RearWallpaperRuntimeCodec {
     fun decode(raw: String): List<RearWallpaperRuntimeRecord> {
         if (raw.isBlank()) return emptyList()
         val array = JsonParser.parseString(raw).asJsonArray
-        return array.mapNotNull { element ->
+        return array.mapNotNull { element -> element.asRecordOrNull() }
+    }
+
+    fun decodeMarkedCurrent(raw: String): List<RearWallpaperRuntimeRecord> {
+        if (raw.isBlank()) return emptyList()
+        return JsonParser.parseString(raw).asJsonArray.mapNotNull { element ->
             val item = element.takeIf { it.isJsonObject }?.asJsonObject ?: return@mapNotNull null
-            val resId = item.string("resId") ?: return@mapNotNull null
-            val applyId = item.string("applyId") ?: return@mapNotNull null
-            RearWallpaperRuntimeRecord(
-                resId = resId,
-                applyId = applyId,
-                resLocalPath = item.string("resLocalPath"),
-                metaPath = item.string("metaPath"),
-                previewPath = item.string("snapshotPreviewPath") ?: item.string("resPreviewPath"),
-                position = item.get("position")?.takeIf { it.isJsonPrimitive }?.asInt ?: -1,
-                displayName = item.localizedString("resName"),
-            )
+            val marker = item.get("outerviewCurrent")
+                ?.takeIf { it.isJsonPrimitive && it.asJsonPrimitive.isBoolean }
+                ?.asBoolean == true
+            item.takeIf { marker }?.asRecordOrNull()
         }
     }
 
@@ -71,6 +69,21 @@ object RearWallpaperRuntimeCodec {
         ?.asString
         ?.trim()
         ?.takeIf { it.isNotBlank() }
+
+    private fun com.google.gson.JsonElement.asRecordOrNull(): RearWallpaperRuntimeRecord? {
+        val item = takeIf { it.isJsonObject }?.asJsonObject ?: return null
+        val resId = item.string("resId") ?: return null
+        val applyId = item.string("applyId") ?: return null
+        return RearWallpaperRuntimeRecord(
+            resId = resId,
+            applyId = applyId,
+            resLocalPath = item.string("resLocalPath"),
+            metaPath = item.string("metaPath"),
+            previewPath = item.string("snapshotPreviewPath") ?: item.string("resPreviewPath"),
+            position = item.get("position")?.takeIf { it.isJsonPrimitive }?.asInt ?: -1,
+            displayName = item.localizedString("resName"),
+        )
+    }
 
     private fun localeValue(value: String): String = JsonObject().apply {
         addProperty("fallback", value)

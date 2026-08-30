@@ -7,13 +7,13 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.os.Binder
-import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.os.ParcelFileDescriptor
 import android.os.Process
-import android.util.AtomicFile
+import android.system.Os
+import android.system.OsConstants
 import com.highcapable.kavaref.KavaRef.Companion.asResolver
 import com.highcapable.kavaref.KavaRef.Companion.resolve
 import com.highcapable.yukihookapi.hook.entity.YukiBaseHooker
@@ -21,8 +21,17 @@ import com.highcapable.yukihookapi.hook.log.YLog
 import org.orynnx.outerview.core.hostapi.FunCardHostContract
 import org.orynnx.outerview.core.hostapi.IFunCardHostConnection
 import org.orynnx.outerview.core.hostapi.IFunCardHostService
+import org.orynnx.outerview.core.internal.HostPendingCleanupPolicy
+import org.orynnx.outerview.core.internal.HostTemplateUnlinkOutcome
+import org.orynnx.outerview.core.internal.HostInstallJournal
+import org.orynnx.outerview.core.internal.HostInstallJournalCodec
+import org.orynnx.outerview.core.internal.HostInstallPrecondition
+import org.orynnx.outerview.core.internal.HostInstallPreconditionPolicy
+import org.orynnx.outerview.core.internal.HostInstallRecovery
+import org.orynnx.outerview.core.internal.HostInstallRegistrySnapshot
 import org.orynnx.outerview.core.internal.ManagedHostPaths
-import org.orynnx.outerview.core.internal.SecureManifestXml
+import org.orynnx.outerview.core.internal.SmartAssistantTemplateValidator
+import org.orynnx.outerview.core.internal.VerifiedHostCardOwnership
 import org.orynnx.outerview.hook.dex.HostClassQuery
 import org.orynnx.outerview.hook.dex.HostDexResolver
 import org.orynnx.outerview.hook.dex.HostFieldQuery
@@ -30,7 +39,11 @@ import org.orynnx.outerview.hook.dex.HostMethodQuery
 import org.orynnx.outerview.hook.dex.HostMethodRef
 import org.json.JSONArray
 import org.json.JSONObject
+import java.io.ByteArrayOutputStream
 import java.io.File
+import java.io.FileOutputStream
+import java.nio.file.Files
+import java.nio.file.StandardCopyOption
 import java.util.Collections
 import java.util.UUID
 import java.util.WeakHashMap
@@ -40,7 +53,6 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.atomic.AtomicReference
-import java.util.zip.ZipFile
 
 class CustomRearCardHook : YukiBaseHooker() {
     private data class HostCard(
@@ -55,6 +67,20 @@ class CustomRearCardHook : YukiBaseHooker() {
         val pendingDelete: Boolean = false,
         val rearParam: String = "{}",
         val focusParam: String = "{}",
+    )
+
+    private data class RegistryStateSnapshot(
+        val cards: Map<String, HostCard>,
+        val suppressedBusinesses: Set<String>,
+        val pendingBulkBusinesses: Set<String>,
+        val pendingBulkTemplates: Set<String>,
+    )
+
+    private data class ActivationPlan(
+        val card: HostCard,
+        val epoch: Long,
+        val wasSuppressed: Boolean,
+        val evidenceBefore: RuntimeEvidence?,
     )
 
     private data class RuntimeEvidence(
@@ -88,7 +114,28 @@ class CustomRearCardHook : YukiBaseHooker() {
         private const val HOST_PACKAGE = "com.xiaomi.subscreencenter"
         private const val DIRECT_RUNTIME_MARKER = "__outerview_host_direct__"
         private const val MAX_TEMPLATE_BYTES = 16L * 1024L * 1024L
+        private const val MAX_REGISTRY_BYTES = 2L * 1024L * 1024L
+        private const val MAX_REGISTRY_RECORDS = 1024
+        private const val MAX_NOTIFICATION_STATE_BYTES = 4L * 1024L * 1024L
+        private const val MAX_INSTALL_JOURNAL_BYTES = 256L * 1024L
         private val SAFE_CARD_ID = Regex("[a-f0-9]{32}")
+        private val INSTALL_JOURNAL_NAME = Regex("\\.install-([a-f0-9]{32})\\.json")
+        private val INSTALL_ORPHAN_NAME = Regex(
+            "\\.install-[a-f0-9]{32}\\.(new|old)\\.zip|" +
+                "\\.outerview_install_[a-f0-9]{32}_[0-9]+\\.tmp|" +
+                "\\.outerview_write_[0-9]+\\.tmp",
+        )
+        private val INSTALL_TARGET_TEMP_NAME = Regex("\\.outerview_install_write_[0-9]+\\.tmp")
+        private val PRIMITIVE_WRAPPERS = mapOf<Class<*>, Class<*>>(
+            Int::class.javaPrimitiveType!! to Int::class.javaObjectType,
+            Long::class.javaPrimitiveType!! to Long::class.javaObjectType,
+            Boolean::class.javaPrimitiveType!! to Boolean::class.javaObjectType,
+            Float::class.javaPrimitiveType!! to Float::class.javaObjectType,
+            Double::class.javaPrimitiveType!! to Double::class.javaObjectType,
+            Short::class.javaPrimitiveType!! to Short::class.javaObjectType,
+            Byte::class.javaPrimitiveType!! to Byte::class.javaObjectType,
+            Char::class.javaPrimitiveType!! to Char::class.javaObjectType,
+        )
         private val SYSTEM_TEMPLATES = linkedMapOf(
             "alarm" to ("闹钟" to "alarm"),
             "carHailing" to ("打车" to "car_hailing"),
@@ -117,6 +164,7 @@ class CustomRearCardHook : YukiBaseHooker() {
     )
     private val lifecycleLock = Any()
     private val registryLock = Any()
+    @Volatile private var registryWriteBlocked = false
     private val runtimeReconcileScheduled = AtomicBoolean(false)
 
     @Volatile private var hostContext: Context? = null
@@ -163,7 +211,11 @@ class CustomRearCardHook : YukiBaseHooker() {
 
         override fun listHostCards(): Bundle {
             enforceCaller()
-            val items = ArrayList(cards.values.sortedBy { it.cardId }.map(::hostCardBundle))
+            val items = ArrayList(
+                synchronized(lifecycleLock) { cards.values.toList() }.sortedBy { it.cardId }
+                    .filter { card -> card.pendingDelete || isVerifiedHostCard(card) }
+                    .map(::hostCardBundle),
+            )
             return Bundle().apply { putParcelableArrayList(FunCardHostContract.Keys.ITEMS, items) }
         }
 
@@ -187,10 +239,22 @@ class CustomRearCardHook : YukiBaseHooker() {
 
         override fun installCard(request: Bundle?, zipFd: ParcelFileDescriptor?): Bundle {
             enforceCaller()
-            val command = parseRequest(request)
+            val command = runCatching { parseRequest(request) }.getOrElse { error ->
+                runCatching { zipFd?.close() }
+                return invalidRequest(error)
+            }
             val fd = zipFd ?: return failure("MISSING_FD", "没有收到模板文件", command)
-            val target = managedTemplateFile(command.cardId)
-            val temp = File(target.parentFile, ".${target.name}.${Process.myPid()}.tmp")
+            val target = runCatching { managedTemplateFile(command.cardId) }.getOrElse { error ->
+                runCatching { fd.close() }
+                return failure("UNSAFE_TEMPLATE_PATH", error.message ?: "模板目录不安全", command)
+            }
+            val temp = runCatching {
+                val directory = ensureRegistryDirectory()
+                File.createTempFile(".outerview_install_${command.cardId}_", ".tmp", directory)
+            }.getOrElse { error ->
+                runCatching { fd.close() }
+                return failure("TEMP_FILE_FAILED", error.message ?: "无法创建模板临时文件", command)
+            }
             val installEpoch = synchronized(lifecycleLock) {
                 installingBusinesses.add(command.business)
                 nextOperationEpoch(command.business)
@@ -198,7 +262,7 @@ class CustomRearCardHook : YukiBaseHooker() {
             return runCatching {
                 var total = 0L
                 ParcelFileDescriptor.AutoCloseInputStream(fd).use { input ->
-                    temp.outputStream().use { output ->
+                    FileOutputStream(temp, false).use { output ->
                         val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
                         while (true) {
                             val read = input.read(buffer)
@@ -207,39 +271,145 @@ class CustomRearCardHook : YukiBaseHooker() {
                             require(total <= MAX_TEMPLATE_BYTES) { "模板超过 16 MB" }
                             output.write(buffer, 0, read)
                         }
+                        output.fd.sync()
                     }
                 }
-                validateTemplate(temp)
+                val actualSha256 = validateTemplate(temp)
+                require(command.sha256 == actualSha256) { "模板摘要校验失败" }
+                val runtimeBusinesses = buildSet {
+                    add(command.business)
+                    cards[command.cardId]?.business?.let(::add)
+                }
+                val runtimePresenceBeforeCommit = runtimeBusinesses.associateWith { business ->
+                    runtimePresence(TESTER_PACKAGE, business)
+                }
                 val card = synchronized(lifecycleLock) {
                     check(currentOperationEpoch(command.business) == installEpoch) {
                         "模板安装已被较新的删除操作取消"
                     }
-                    if (target.exists()) check(target.delete()) { "无法替换旧模板" }
-                    check(temp.renameTo(target) || runCatching {
-                        temp.copyTo(target, overwrite = true)
-                        temp.delete()
-                        true
-                    }.getOrDefault(false)) { "模板部署失败" }
-                    target.setReadable(true, false)
+                    check(!registryWriteBlocked) { "宿主 registry 无法安全读取；已阻止安装" }
+                    recoverHostInstallTransactionIfPresent(command.cardId, cards[command.cardId])
+                    val stateBefore = registryStateSnapshot()
+                    val previousCard = cards[command.cardId]
+                    val runtimeAbsenceConfirmed = buildSet {
+                        add(command.business)
+                        previousCard?.business?.let(::add)
+                    }.all { business ->
+                        runtimePresenceBeforeCommit[business] == RuntimePresence.ABSENT
+                    }
+                    when (
+                        HostInstallPreconditionPolicy.evaluate(
+                            previousPendingDelete = previousCard?.pendingDelete == true,
+                            previousEnabled = previousCard?.enabled == true,
+                            runtimeAbsenceConfirmed = runtimeAbsenceConfirmed,
+                        )
+                    ) {
+                        HostInstallPrecondition.ALLOW -> Unit
+                        HostInstallPrecondition.DELETE_PENDING -> error("卡片删除进行中；已拒绝安装")
+                        HostInstallPrecondition.ENABLED -> error("旧卡片仍处于启用状态；请先停用再安装")
+                        HostInstallPrecondition.RUNTIME_NOT_CONFIRMED_ABSENT ->
+                            error("无法确认旧卡片 Runtime 已移除；已拒绝替换模板")
+                    }
+                    if (previousCard != null) {
+                        require(isVerifiedHostCard(previousCard)) {
+                            "宿主 registry 旧模板缺失或摘要不匹配"
+                        }
+                    }
+                    val previousTargetSha256 = existingTransactionFileSha(target)
                     val installed = HostCard(
                         cardId = command.cardId,
                         business = command.business,
                         displayName = command.displayName,
-                        templatePath = target.absolutePath,
+                        templatePath = target.canonicalPath,
                         sha256 = command.sha256,
                         notificationId = command.notificationId,
                         updatedAt = System.currentTimeMillis(),
                     )
-                    pendingBulkBusinesses.remove(command.business)
-                    pendingBulkTemplates.remove(target.absolutePath)
-                    suppressedBusinesses.remove(command.business)
-                    cards[installed.cardId] = installed
-                    writeRegistry()
+                    val journal = HostInstallJournal(
+                        cardId = command.cardId,
+                        oldRegistryFingerprint = previousCard?.let(::hostCardFingerprint),
+                        newRegistryFingerprint = hostCardFingerprint(installed),
+                        oldTemplatePath = previousCard?.let { File(it.templatePath).canonicalPath },
+                        oldTargetSha256 = previousTargetSha256,
+                        newTargetSha256 = command.sha256,
+                    )
+                    val journalFile = installJournalFile(command.cardId)
+                    val staging = installStagingFile(command.cardId)
+                    val backup = installBackupFile(command.cardId)
+                    require(!journalFile.exists() && !staging.exists() && !backup.exists()) {
+                        "已有未完成的 Host 模板安装事务"
+                    }
+                    var committedAfterException: Throwable? = null
+                    try {
+                        moveIncomingTemplateToStaging(temp, staging)
+                        writeFileAtomically(
+                            journalFile,
+                            HostInstallJournalCodec.encode(journal),
+                            MAX_INSTALL_JOURNAL_BYTES,
+                            "Host install journal",
+                        )
+                        if (previousTargetSha256 != null) {
+                            copyTransactionFileAtomically(target, backup, previousTargetSha256)
+                        }
+                        copyTransactionFileAtomically(staging, target, command.sha256)
+                        check(target.setReadable(true, false)) { "无法设置模板读取权限" }
+                        cards[installed.cardId] = installed
+                        pendingBulkBusinesses.remove(command.business)
+                        pendingBulkTemplates.remove(target.canonicalPath)
+                        suppressedBusinesses.remove(command.business)
+                        writeRegistry()
+                    } catch (error: Throwable) {
+                        if (!journalFile.isFile) {
+                            restoreRegistryState(stateBefore)
+                            runCatching { deleteInstallSidecar(staging) }.onFailure(error::addSuppressed)
+                            runCatching { deleteInstallSidecar(backup) }.onFailure(error::addSuppressed)
+                            throw error
+                        }
+                        val diskFingerprint = runCatching {
+                            readRegistryCardFingerprintFromDisk(command.cardId)
+                        }.getOrElse { auditError ->
+                            error.addSuppressed(auditError)
+                            blockUnsafeInstallRecovery(previousCard, command.business, auditError)
+                            throw error
+                        }
+                        val recovery = runCatching {
+                            recoverHostInstallTransaction(journal, diskFingerprint)
+                        }.onFailure { recoveryError ->
+                            error.addSuppressed(recoveryError)
+                            blockUnsafeInstallRecovery(previousCard, command.business, recoveryError)
+                        }
+                        if (recovery.isFailure) {
+                            if (diskFingerprint == journal.oldRegistryFingerprint) {
+                                restoreRegistryState(stateBefore)
+                            }
+                            throw error
+                        }
+                        if (diskFingerprint == journal.newRegistryFingerprint) {
+                            cards[installed.cardId] = installed
+                            pendingBulkBusinesses.remove(command.business)
+                            pendingBulkTemplates.remove(target.canonicalPath)
+                            suppressedBusinesses.remove(command.business)
+                            committedAfterException = error
+                        } else {
+                            restoreRegistryState(stateBefore)
+                            throw error
+                        }
+                    }
+                    committedAfterException?.let { committedError ->
+                        YLog.warn(
+                            "[$TAG] Host install registry was already committed; recovered as success",
+                            committedError,
+                        )
+                    }
                     evidence[installed.business] = RuntimeEvidence(
                         actualTemplatePath = installed.templatePath,
                         lastCommandId = command.commandId,
                         lastEventAt = System.currentTimeMillis(),
                     )
+                    runCatching { finishCommittedHostInstallTransaction(journal) }
+                        .onFailure { cleanupError ->
+                            YLog.warn("[$TAG] Host install committed; cleanup will retry", cleanupError)
+                        }
                     installed
                 }
                 log("install", command, true, "deployed=${card.templatePath}")
@@ -257,21 +427,35 @@ class CustomRearCardHook : YukiBaseHooker() {
 
         override fun uninstallCard(request: Bundle?): Bundle {
             enforceCaller()
-            val command = parseRequest(request)
+            val command = runCatching { parseRequest(request) }
+                .getOrElse { error -> return invalidRequest(error) }
             return runCatching {
-                val target = cards[command.cardId]?.templatePath?.let(::File)
-                    ?: managedTemplateFile(command.cardId)
-                require(isManagedTemplate(target)) { "拒绝删除非托管路径" }
+                val registered = cards[command.cardId]
+                if (registered != null) {
+                    require(
+                        registered.business == command.business &&
+                            registered.sha256 == command.sha256 &&
+                            registered.notificationId == command.notificationId,
+                    ) { "卸载请求与宿主 registry 身份不一致" }
+                }
+                val target = registered?.templatePath?.let(::File) ?: managedTemplateFile(command.cardId)
+                require(isTemplateForCard(target, command.cardId)) { "拒绝删除非托管路径" }
                 synchronized(lifecycleLock) {
-                    nextOperationEpoch(command.business)
-                    suppressedBusinesses.add(command.business)
-                    cards[command.cardId]?.let { card ->
-                        cards[command.cardId] = card.copy(
-                            enabled = false,
-                            pendingDelete = true,
-                            updatedAt = System.currentTimeMillis(),
-                        )
-                        writeRegistry()
+                    val stateBefore = registryStateSnapshot()
+                    try {
+                        nextOperationEpoch(command.business)
+                        suppressedBusinesses.add(command.business)
+                        cards[command.cardId]?.let { card ->
+                            cards[command.cardId] = card.copy(
+                                enabled = false,
+                                pendingDelete = true,
+                                updatedAt = System.currentTimeMillis(),
+                            )
+                            writeRegistry()
+                        }
+                    } catch (error: Throwable) {
+                        restoreRegistryState(stateBefore)
+                        throw error
                     }
                 }
                 submitRuntimeRemoval(command.business)
@@ -294,66 +478,24 @@ class CustomRearCardHook : YukiBaseHooker() {
             enforceCaller()
             val commandId = request?.getString(FunCardHostContract.Keys.COMMAND_ID).orEmpty()
                 .ifBlank { "delete_all_${System.currentTimeMillis()}" }
-            return runCatching {
-                val runtimeBusinesses = managerOuterViewBusinesses()
-                val (snapshot, businesses) = synchronized(lifecycleLock) {
-                    val currentCards = cards.values.toList()
-                    val cleanupTargets = File(templateBase()).listFiles().orEmpty()
-                        .filter(::isManagedTemplate)
-                        .map { it.absolutePath }
-                        .toSet()
-                    val ownedBusinesses = (
-                        currentCards.map { it.business } + runtimeBusinesses +
-                            cleanupTargets.map { File(it).name }
-                        ).toSet()
-                    currentCards.forEach { card ->
-                        nextOperationEpoch(card.business)
-                        suppressedBusinesses.add(card.business)
-                        cards[card.cardId] = card.copy(
-                            enabled = false,
-                            pendingDelete = true,
-                            updatedAt = System.currentTimeMillis(),
-                        )
-                    }
-                    suppressedBusinesses.addAll(ownedBusinesses)
-                    pendingBulkBusinesses.addAll(ownedBusinesses)
-                    pendingBulkTemplates.addAll(cleanupTargets)
-                    // Disable first so scheduled restoration cannot race cleanup.
-                    writeRegistry()
-                    currentCards to ownedBusinesses
-                }
-                businesses.forEach(::submitRuntimeRemoval)
-                snapshot.forEach { card ->
-                    if (!finalizePendingDeletion(card.cardId, card.business)) {
-                        schedulePendingDeletionCleanup(card.cardId, card.business)
-                    }
-                }
-                val bulkComplete = cleanupPendingBulk()
-                if (!bulkComplete) scheduleDeleteAllCleanup()
-                val pending = !bulkComplete || cards.values.any { it.pendingDelete }
-                Bundle().apply {
-                    putBoolean(FunCardHostContract.Keys.SUCCESS, true)
-                    putString(
-                        FunCardHostContract.Keys.MESSAGE,
-                        if (pending) "已提交 ${businesses.size} 张背屏卡片的安全清理"
-                        else "已安全删除 ${businesses.size} 张背屏卡片",
-                    )
-                    putString(FunCardHostContract.Keys.COMMAND_ID, commandId)
-                    putBoolean(FunCardHostContract.Keys.CLEANUP_PENDING, pending)
-                }
-            }.getOrElse {
-                Bundle().apply {
-                    putBoolean(FunCardHostContract.Keys.SUCCESS, false)
-                    putString(FunCardHostContract.Keys.MESSAGE, it.message ?: "全部删除失败")
-                    putString(FunCardHostContract.Keys.ERROR_CODE, "DELETE_ALL_FAILED")
-                    putString(FunCardHostContract.Keys.COMMAND_ID, commandId)
-                }
+            if (commandId.length !in 1..160 || commandId.any(Char::isISOControl)) {
+                return invalidRequest(IllegalArgumentException("命令 ID 无效"))
+            }
+            // A shape-only bulk request cannot prove ownership of legacy
+            // reareye_custom_* records.  The manager now calls uninstallCard for
+            // each private-registry identity (cardId/business/SHA/notificationId).
+            return Bundle().apply {
+                putBoolean(FunCardHostContract.Keys.SUCCESS, false)
+                putString(FunCardHostContract.Keys.MESSAGE, "请使用逐卡身份校验删除")
+                putString(FunCardHostContract.Keys.ERROR_CODE, "IDENTIFIED_DELETE_REQUIRED")
+                putString(FunCardHostContract.Keys.COMMAND_ID, commandId)
             }
         }
 
         override fun activateCard(request: Bundle?): Bundle {
             enforceCaller()
-            val command = parseRequest(request)
+            val command = runCatching { parseRequest(request) }
+                .getOrElse { error -> return invalidRequest(error) }
             return runCatching {
                 activateCardInHost(command)
                 success("卡片已通过宿主原生管线激活", command, businessPath(command.business))
@@ -365,7 +507,8 @@ class CustomRearCardHook : YukiBaseHooker() {
 
         override fun deactivateCard(request: Bundle?): Bundle {
             enforceCaller()
-            val command = parseRequest(request)
+            val command = runCatching { parseRequest(request) }
+                .getOrElse { error -> return invalidRequest(error) }
             return runCatching {
                 deactivateCardInHost(command)
                 success("卡片已从宿主 runtime 移除", command, businessPath(command.business))
@@ -429,8 +572,8 @@ class CustomRearCardHook : YukiBaseHooker() {
             }.hook().after {
                 val baseContext = args[0] as? Context
                 hostContext = baseContext?.applicationContext ?: baseContext
-                registerServiceReceiver()
                 loadRegistry()
+                registerServiceReceiver()
                 YLog.info(
                     "[$TAG] host attached cards=${cards.size} context=${hostContext != null} receiver=$receiverRegistered"
                 )
@@ -657,8 +800,15 @@ class CustomRearCardHook : YukiBaseHooker() {
                         val current = cards[card.cardId] ?: return@synchronized
                         if (current.enabled && current.business !in suppressedBusinesses) {
                             val now = System.currentTimeMillis()
-                            cards[current.cardId] = current.copy(enabled = false, updatedAt = now)
-                            writeRegistry()
+                            val stateBefore = registryStateSnapshot()
+                            try {
+                                cards[current.cardId] = current.copy(enabled = false, updatedAt = now)
+                                writeRegistry()
+                            } catch (error: Throwable) {
+                                restoreRegistryState(stateBefore)
+                                YLog.error("[$TAG] failed to persist external removal", error)
+                                return@synchronized
+                            }
                             evidence[current.business] = (evidence[current.business] ?: RuntimeEvidence()).copy(
                                 liveWidgetContains = false,
                                 runtimeActivated = false,
@@ -696,12 +846,13 @@ class CustomRearCardHook : YukiBaseHooker() {
                     .onFailure { YLog.error("[$TAG] service callback failed", it) }
             }
         }
-        if (Build.VERSION.SDK_INT >= 33) {
-            context.registerReceiver(receiver, IntentFilter(FunCardHostContract.ACTION_REQUEST_SERVICE), Context.RECEIVER_EXPORTED)
-        } else {
-            @Suppress("DEPRECATION")
-            context.registerReceiver(receiver, IntentFilter(FunCardHostContract.ACTION_REQUEST_SERVICE))
-        }
+        context.registerReceiver(
+            receiver,
+            IntentFilter(FunCardHostContract.ACTION_REQUEST_SERVICE),
+            FunCardHostContract.ACCESS_HOST_API_PERMISSION,
+            null,
+            Context.RECEIVER_EXPORTED,
+        )
         receiverRegistered = true
     }
 
@@ -715,35 +866,77 @@ class CustomRearCardHook : YukiBaseHooker() {
         val bundle = request ?: Bundle.EMPTY
         val cardId = bundle.getString(FunCardHostContract.Keys.CARD_ID)?.trim().orEmpty()
         val business = bundle.getString(FunCardHostContract.Keys.BUSINESS)?.trim().orEmpty()
+        val displayName = bundle.getString(FunCardHostContract.Keys.DISPLAY_NAME).orEmpty()
+            .ifBlank { business }.trim()
+        val sha256 = bundle.getString(FunCardHostContract.Keys.TEMPLATE_SHA256).orEmpty()
+        val commandId = bundle.getString(FunCardHostContract.Keys.COMMAND_ID).orEmpty()
+        val rearParam = bundle.getString(FunCardHostContract.Keys.REAR_PARAM).orEmpty()
+        val focusParam = bundle.getString(FunCardHostContract.Keys.FOCUS_PARAM).orEmpty()
         require(cardId.matches(SAFE_CARD_ID)) { "cardId 无效" }
         require(ManagedHostPaths.matchesBusiness(cardId, business)) { "business 与 cardId 不匹配" }
+        require(displayName.codePointCount(0, displayName.length) in 1..80 &&
+            displayName.none(::isUnsafeDisplayCharacter)
+        ) { "卡片名称无效" }
+        require(sha256.matches(Regex("[a-f0-9]{64}"))) { "模板摘要无效" }
+        require(commandId.length in 1..160 && commandId.none(Char::isISOControl)) { "命令 ID 无效" }
+        val notificationId = bundle.getInt(FunCardHostContract.Keys.NOTIFICATION_ID)
+        require(notificationId in 620_000..719_999) { "notificationId 无效" }
+        require(rearParam.toByteArray().size + focusParam.toByteArray().size <= 128 * 1024) {
+            "卡片参数过大"
+        }
         return CardCommand(
             cardId,
             business,
-            bundle.getString(FunCardHostContract.Keys.DISPLAY_NAME).orEmpty().ifBlank { business },
-            bundle.getString(FunCardHostContract.Keys.TEMPLATE_SHA256).orEmpty(),
-            bundle.getInt(FunCardHostContract.Keys.NOTIFICATION_ID),
-            bundle.getString(FunCardHostContract.Keys.COMMAND_ID).orEmpty(),
-            bundle.getString(FunCardHostContract.Keys.REAR_PARAM).orEmpty(),
-            bundle.getString(FunCardHostContract.Keys.FOCUS_PARAM).orEmpty(),
+            displayName,
+            sha256,
+            notificationId,
+            commandId,
+            rearParam,
+            focusParam,
         )
     }
 
     private fun activateCardInHost(command: CardCommand, persist: Boolean = true) {
-        val (card, activationEpoch) = synchronized(lifecycleLock) {
+        require(command.rearParam.isNotBlank() && command.focusParam.isNotBlank()) { "卡片 payload 为空" }
+        val plan = synchronized(lifecycleLock) {
             val current = cards[command.cardId] ?: error("宿主 registry 中不存在该卡片")
             check(!current.pendingDelete) { "卡片正在删除，不能重新启用" }
+            require(current.business == command.business &&
+                current.notificationId == command.notificationId &&
+                current.sha256 == command.sha256
+            ) { "卡片请求与宿主 registry 身份不一致" }
+            require(isVerifiedHostCard(current) && File(current.templatePath).canRead()) {
+                "宿主模板缺失、不可读或摘要不匹配"
+            }
+            val wasSuppressed = command.business in suppressedBusinesses
             if (persist) {
+                check(!registryWriteBlocked) { "宿主 registry 无法安全读取；已阻止覆盖" }
+                val candidate = current.copy(
+                    enabled = true,
+                    rearParam = command.rearParam,
+                    focusParam = command.focusParam,
+                    updatedAt = System.currentTimeMillis(),
+                )
+                encodeRegistry(
+                    cardValues = cards.values.filterNot { it.cardId == current.cardId } + candidate,
+                    pendingBusinesses = pendingBulkBusinesses,
+                    pendingTemplates = pendingBulkTemplates,
+                )
                 suppressedBusinesses.remove(command.business)
             } else {
                 check(current.enabled && command.business !in suppressedBusinesses) {
                     "卡片恢复已被较新的停用操作取消"
                 }
             }
-            current to nextOperationEpoch(command.business)
+            ActivationPlan(
+                card = current,
+                epoch = nextOperationEpoch(command.business),
+                wasSuppressed = wasSuppressed,
+                evidenceBefore = evidence[command.business],
+            )
         }
-        require(File(card.templatePath).isFile && File(card.templatePath).canRead()) { "宿主模板不可读" }
-        require(command.rearParam.isNotBlank() && command.focusParam.isNotBlank()) { "卡片 payload 为空" }
+        val card = plan.card
+        val activationEpoch = plan.epoch
         val runtimeId = syntheticRuntimeId(command.notificationId)
         val compositeKey = "$TESTER_PACKAGE:${command.business}:$runtimeId"
         val extras = Bundle().apply {
@@ -763,50 +956,77 @@ class CustomRearCardHook : YukiBaseHooker() {
             putString("__fun_card_id__", command.cardId)
             putBoolean(DIRECT_RUNTIME_MARKER, true)
         }
-        runOnMainThread {
-            val target = manager ?: error("Smart Assistant manager 尚未就绪")
-            if (managerContains(TESTER_PACKAGE, command.business)) {
-                removeManagerRecord(target, ManagerRemoval.Business(TESTER_PACKAGE, command.business))
+        try {
+            runOnMainThread {
+                val target = manager ?: error("Smart Assistant manager 尚未就绪")
+                if (managerContains(TESTER_PACKAGE, command.business)) {
+                    removeManagerRecord(target, ManagerRemoval.Business(TESTER_PACKAGE, command.business))
+                }
+                val runnable = createPostRunnable(
+                    manager = target,
+                    runtimeId = runtimeId,
+                    packageName = TESTER_PACKAGE,
+                    compositeKey = compositeKey,
+                    extras = extras,
+                )
+                runnable.run()
             }
-            val runnable = createPostRunnable(
-                manager = target,
-                runtimeId = runtimeId,
-                packageName = TESTER_PACKAGE,
-                compositeKey = compositeKey,
-                extras = extras,
-            )
-            runnable.run()
+        } catch (error: Throwable) {
+            if (persist) synchronized(lifecycleLock) {
+                if (currentOperationEpoch(command.business) == activationEpoch) {
+                    if (plan.wasSuppressed) suppressedBusinesses.add(command.business)
+                    else suppressedBusinesses.remove(command.business)
+                }
+            }
+            runCatching { submitRuntimeRemoval(command.business) }
+            throw error
         }
         val now = System.currentTimeMillis()
-        val accepted = synchronized(lifecycleLock) {
-            val current = cards[card.cardId]
-            if (currentOperationEpoch(command.business) != activationEpoch ||
-                command.business in suppressedBusinesses || current?.pendingDelete != false
-            ) {
-                false
-            } else {
-                cards[card.cardId] = current.copy(
-                    enabled = true,
-                    rearParam = command.rearParam,
-                    focusParam = command.focusParam,
-                    updatedAt = now,
-                )
-                evidence[command.business] = (evidence[command.business] ?: RuntimeEvidence()).copy(
-                    notificationSeen = false,
-                    runtimeActivated = true,
-                    lastCommandId = command.commandId,
-                    lastEventAt = now,
-                    lastError = null,
-                )
-                if (persist) writeRegistry()
-                dispatchRuntimeEvent(command.business, "runtime_activated")
-                true
+        val accepted = try {
+            synchronized(lifecycleLock) {
+                val current = cards[card.cardId]
+                if (currentOperationEpoch(command.business) != activationEpoch ||
+                    command.business in suppressedBusinesses || current?.pendingDelete != false
+                ) {
+                    false
+                } else {
+                    try {
+                        cards[card.cardId] = current.copy(
+                            enabled = true,
+                            rearParam = command.rearParam,
+                            focusParam = command.focusParam,
+                            updatedAt = now,
+                        )
+                        evidence[command.business] = (evidence[command.business] ?: RuntimeEvidence()).copy(
+                            notificationSeen = false,
+                            runtimeActivated = true,
+                            lastCommandId = command.commandId,
+                            lastEventAt = now,
+                            lastError = null,
+                        )
+                        if (persist) writeRegistry()
+                        true
+                    } catch (error: Throwable) {
+                        if (persist) {
+                            cards[card.cardId] = plan.card
+                            if (plan.wasSuppressed) suppressedBusinesses.add(command.business)
+                            else suppressedBusinesses.remove(command.business)
+                            if (plan.evidenceBefore == null) evidence.remove(command.business)
+                            else evidence[command.business] = plan.evidenceBefore
+                        }
+                        throw error
+                    }
+                }
             }
+        } catch (error: Throwable) {
+            runCatching { submitRuntimeRemoval(command.business) }
+            throw error
         }
         if (!accepted) {
             scheduleSuppressedRuntimeEject(command.business, extras)
             error("卡片启用已被较新的停用或删除操作取消")
         }
+        dispatchRuntimeEvent(command.business, "runtime_activated")
         log("activate", command, true, "compositeKey=$compositeKey")
     }
 
@@ -872,29 +1092,25 @@ class CustomRearCardHook : YukiBaseHooker() {
     }
 
     private fun acceptsArgument(expectedType: Class<*>, value: Any): Boolean {
-        if (!expectedType.isPrimitive) return expectedType.isInstance(value)
-        return when (expectedType) {
-            Int::class.javaPrimitiveType -> value is Int
-            Long::class.javaPrimitiveType -> value is Long
-            Boolean::class.javaPrimitiveType -> value is Boolean
-            Float::class.javaPrimitiveType -> value is Float
-            Double::class.javaPrimitiveType -> value is Double
-            Short::class.javaPrimitiveType -> value is Short
-            Byte::class.javaPrimitiveType -> value is Byte
-            Char::class.javaPrimitiveType -> value is Char
-            else -> false
-        }
+        val acceptedRuntimeType = PRIMITIVE_WRAPPERS[expectedType] ?: expectedType
+        return acceptedRuntimeType.isInstance(value)
     }
 
     private fun deactivateCardInHost(command: CardCommand, persist: Boolean = true) {
         val now = System.currentTimeMillis()
         synchronized(lifecycleLock) {
             val card = cards[command.cardId] ?: error("宿主 registry 中不存在该卡片")
-            nextOperationEpoch(command.business)
-            suppressedBusinesses.add(command.business)
-            // Persist this before removal so delayed startup restoration cannot win.
-            cards[card.cardId] = card.copy(enabled = false, updatedAt = now)
-            if (persist) writeRegistry()
+            val stateBefore = registryStateSnapshot()
+            try {
+                nextOperationEpoch(command.business)
+                suppressedBusinesses.add(command.business)
+                // Persist this before removal so delayed startup restoration cannot win.
+                cards[card.cardId] = card.copy(enabled = false, updatedAt = now)
+                if (persist) writeRegistry()
+            } catch (error: Throwable) {
+                restoreRegistryState(stateBefore)
+                throw error
+            }
             evidence[command.business] = (evidence[command.business] ?: RuntimeEvidence()).copy(
                 liveWidgetContains = false,
                 runtimeActivated = false,
@@ -910,12 +1126,15 @@ class CustomRearCardHook : YukiBaseHooker() {
 
     /** Delivers host lifecycle callbacks to the manager app without using notifications. */
     private fun dispatchRuntimeEvent(business: String, event: String) {
-        hostContext?.sendBroadcast(
-            Intent(FunCardHostContract.ACTION_CARD_RUNTIME_EVENT)
-                .setPackage(TESTER_PACKAGE)
-                .putExtra(FunCardHostContract.Keys.BUSINESS, business)
-                .putExtra(FunCardHostContract.Keys.RUNTIME_EVENT, event),
-        )
+        runCatching {
+            hostContext?.sendBroadcast(
+                Intent(FunCardHostContract.ACTION_CARD_RUNTIME_EVENT)
+                    .setPackage(TESTER_PACKAGE)
+                    .putExtra(FunCardHostContract.Keys.BUSINESS, business)
+                    .putExtra(FunCardHostContract.Keys.RUNTIME_EVENT, event)
+                    .putExtra(FunCardHostContract.Keys.PROVIDER_INSTANCE_ID, providerInstanceId),
+            )
+        }.onFailure { YLog.warn("[$TAG] runtime event delivery failed", it) }
     }
 
     private fun submitRuntimeRemoval(business: String) {
@@ -996,12 +1215,40 @@ class CustomRearCardHook : YukiBaseHooker() {
             val card = cards[cardId]
             if (card != null && (card.business != business || !card.pendingDelete)) return@synchronized false
             val target = card?.templatePath?.let(::File) ?: managedTemplateFile(cardId)
-            require(isManagedTemplate(target)) { "拒绝清理非托管模板" }
-            if (target.exists()) check(target.delete()) { "删除宿主模板失败" }
-            pendingBulkTemplates.remove(target.absolutePath)
-            pendingBulkBusinesses.remove(business)
-            if (card != null) cards.remove(cardId, card)
-            writeRegistry()
+            require(isTemplateForCard(target, cardId)) {
+                "拒绝清理非托管模板"
+            }
+            val unlinkOutcome = try {
+                if (Files.deleteIfExists(target.toPath())) {
+                    HostTemplateUnlinkOutcome.REMOVED
+                } else {
+                    HostTemplateUnlinkOutcome.ABSENT
+                }
+            } catch (error: Throwable) {
+                YLog.warn("[$TAG] pending template unlink failed path=${target.absolutePath}", error)
+                HostTemplateUnlinkOutcome.FAILED
+            }
+            if (!HostPendingCleanupPolicy.canCommitRegistryDeletion(unlinkOutcome)) {
+                return@synchronized false
+            }
+            if (unlinkOutcome == HostTemplateUnlinkOutcome.REMOVED) {
+                syncDirectory(requireNotNull(target.parentFile))
+            }
+            val stateBefore = registryStateSnapshot()
+            try {
+                pendingBulkTemplates.remove(target.canonicalPath)
+                pendingBulkBusinesses.remove(business)
+                if (card != null) cards.remove(cardId, card)
+                writeRegistry()
+            } catch (error: Throwable) {
+                restoreRegistryState(stateBefore)
+                YLog.warn(
+                    "[$TAG] template unlinked but registry cleanup failed; retry remains pending " +
+                        "business=$business",
+                    error,
+                )
+                return@synchronized false
+            }
             evidence.remove(business)
             dispatchRuntimeEvent(business, "runtime_deleted")
             YLog.info("[$TAG] pending delete finalized business=$business path=${target.absolutePath}")
@@ -1034,29 +1281,35 @@ class CustomRearCardHook : YukiBaseHooker() {
             runtimePresence(TESTER_PACKAGE, business)
         }
         synchronized(lifecycleLock) {
+            val stateBefore = registryStateSnapshot()
             var changed = false
-            pendingBulkBusinesses.toList().forEach { business ->
-                if (states[business] == RuntimePresence.ABSENT) {
-                    changed = pendingBulkBusinesses.remove(business) || changed
+            try {
+                pendingBulkBusinesses.toList().forEach { business ->
+                    if (states[business] == RuntimePresence.ABSENT) {
+                        changed = pendingBulkBusinesses.remove(business) || changed
+                    }
                 }
-            }
-            val retained = cards.values.filterNot { it.pendingDelete }
-                .map { File(it.templatePath).absolutePath }
-                .toSet()
-            pendingBulkTemplates.toList().forEach { path ->
-                val target = File(path)
-                val business = target.name
-                val resolved = when {
-                    !isManagedTemplate(target) -> true
-                    path in retained -> true
-                    business in installingBusinesses -> false
-                    !target.exists() -> true
-                    states[business] == RuntimePresence.ABSENT -> target.delete()
-                    else -> false
+                val retained = cards.values.filterNot { it.pendingDelete }
+                    .map { File(it.templatePath).canonicalPath }
+                    .toSet()
+                pendingBulkTemplates.toList().forEach { path ->
+                    val target = File(path).canonicalFile
+                    val business = target.name
+                    val resolved = when {
+                        !isManagedTemplate(target) -> true
+                        target.path in retained -> true
+                        business in installingBusinesses -> false
+                        !target.exists() -> true
+                        states[business] == RuntimePresence.ABSENT -> target.delete()
+                        else -> false
+                    }
+                    if (resolved) changed = pendingBulkTemplates.remove(target.path) || changed
                 }
-                if (resolved) changed = pendingBulkTemplates.remove(path) || changed
+                if (changed) writeRegistry()
+            } catch (error: Throwable) {
+                restoreRegistryState(stateBefore)
+                throw error
             }
-            if (changed) writeRegistry()
             pendingBulkBusinesses.isEmpty() && pendingBulkTemplates.isEmpty()
         }
     }
@@ -1227,6 +1480,12 @@ class CustomRearCardHook : YukiBaseHooker() {
     private fun failure(code: String, message: String, command: CardCommand): Bundle =
         diagnosticBundle(command, false, message, code, businessPath(command.business))
 
+    private fun invalidRequest(error: Throwable): Bundle = Bundle().apply {
+        putBoolean(FunCardHostContract.Keys.SUCCESS, false)
+        putString(FunCardHostContract.Keys.MESSAGE, error.message ?: "请求参数无效")
+        putString(FunCardHostContract.Keys.ERROR_CODE, "INVALID_REQUEST")
+    }
+
     private fun diagnosticBundle(
         command: CardCommand,
         success: Boolean,
@@ -1258,84 +1517,576 @@ class CustomRearCardHook : YukiBaseHooker() {
         return ManagedHostPaths.isManagedTemplate(File(templateBase()), file)
     }
 
+    private fun isTemplateForCard(file: File, cardId: String): Boolean {
+        return ManagedHostPaths.isTemplateForCard(File(templateBase()), file, cardId)
+    }
+
     private fun templateBase(): String =
         "/data/system/theme_magic/users/${Process.myUid() / 100000}/subscreencenter/smart_assistant"
 
     private fun registryDir(): File = File(
-        "/data/system/theme_magic/users/${Process.myUid() / 100000}/subscreencenter/outerview_cards"
+        "/data/system/theme_magic/users/${Process.myUid() / 100000}/subscreencenter/outerview_cards",
+    ).absoluteFile.also { directory ->
+        require(!Files.isSymbolicLink(directory.toPath())) { "宿主 registry 目录不允许使用符号链接" }
+    }
+
+    private fun registryFile(): File {
+        val directory = registryDir()
+        val file = File(directory, "registry.json").absoluteFile
+        require(file.parentFile == directory && !Files.isSymbolicLink(file.toPath())) {
+            "宿主 registry 路径不安全"
+        }
+        require(file.canonicalFile.parentFile == directory.canonicalFile) { "宿主 registry 越出受管目录" }
+        return file
+    }
+
+    private fun ensureRegistryDirectory(): File = registryDir().also { directory ->
+        check(directory.isDirectory || directory.mkdirs()) { "无法创建宿主 registry 目录" }
+        require(!Files.isSymbolicLink(directory.toPath())) { "宿主 registry 目录不允许使用符号链接" }
+    }
+
+    private fun installJournalFile(cardId: String): File =
+        installSidecar(cardId, ".install-$cardId.json")
+
+    private fun installStagingFile(cardId: String): File =
+        installSidecar(cardId, ".install-$cardId.new.zip")
+
+    private fun installBackupFile(cardId: String): File =
+        installSidecar(cardId, ".install-$cardId.old.zip")
+
+    private fun installSidecar(cardId: String, name: String): File {
+        require(cardId.matches(SAFE_CARD_ID)) { "Host install sidecar cardId 无效" }
+        val directory = registryDir()
+        val file = File(directory, name).absoluteFile
+        require(file.parentFile == directory && !Files.isSymbolicLink(file.toPath())) {
+            "Host install sidecar 路径不安全"
+        }
+        require(file.canonicalFile.parentFile == directory.canonicalFile) {
+            "Host install sidecar 越出 registry 目录"
+        }
+        return file
+    }
+
+    private fun HostCard.installSnapshot() = HostInstallRegistrySnapshot(
+        cardId = cardId,
+        business = business,
+        displayName = displayName,
+        templatePath = File(templatePath).canonicalPath,
+        sha256 = sha256,
+        notificationId = notificationId,
+        updatedAt = updatedAt,
+        enabled = enabled,
+        pendingDelete = pendingDelete,
+        rearParam = rearParam,
+        focusParam = focusParam,
     )
 
-    private fun registryFile(): File = File(registryDir(), "registry.json")
+    private fun hostCardFingerprint(card: HostCard): String =
+        HostInstallJournalCodec.registryFingerprint(card.installSnapshot())
 
-    private fun legacyRegistryFile(): File = File(
-        "/data/system/theme_magic/users/${Process.myUid() / 100000}/subscreencenter/reareye_custom_cards/registry.json"
-    )
+    private fun blockUnsafeInstallRecovery(
+        previousCard: HostCard?,
+        newBusiness: String,
+        error: Throwable,
+    ) {
+        registryWriteBlocked = true
+        suppressedBusinesses.add(newBusiness)
+        previousCard?.business?.let(suppressedBusinesses::add)
+        YLog.error("[$TAG] Host install recovery is ambiguous; writes and runtime restore blocked", error)
+    }
+
+    private fun readRegistryCardFingerprintFromDisk(cardId: String): String? =
+        synchronized(registryLock) {
+            val file = registryFile()
+            if (!file.exists()) return@synchronized null
+            require(file.isFile) { "宿主 registry 不是普通文件" }
+            val root = JSONObject(readTextBounded(file, MAX_REGISTRY_BYTES, "宿主 registry"))
+            decodeRegistryCards(root)[cardId]?.let(::hostCardFingerprint)
+        }
+
+    private fun decodeRegistryCards(root: JSONObject): LinkedHashMap<String, HostCard> {
+        val schemaVersion = root.optInt("schemaVersion", -1)
+        require(schemaVersion == 5) { "不支持的宿主 registry 版本：$schemaVersion" }
+        val array = requireNotNull(root.optJSONArray("cards")) { "宿主 registry 缺少 cards" }
+        require(array.length() <= MAX_REGISTRY_RECORDS) { "宿主 registry 卡片数量过多" }
+        val loadedCards = linkedMapOf<String, HostCard>()
+        val loadedTemplatePaths = linkedSetOf<String>()
+        val loadedNotificationIds = linkedSetOf<Int>()
+        for (index in 0 until array.length()) {
+            val item = requireNotNull(array.optJSONObject(index)) { "宿主 registry 卡片记录无效" }
+            val cardId = item.optString("cardId")
+            val business = item.optString("business")
+            val target = File(item.optString("templatePath")).canonicalFile
+            require(ManagedHostPaths.matchesBusiness(cardId, business)) { "宿主 registry business 无效" }
+            require(isTemplateForCard(target, cardId)) {
+                "宿主 registry 模板路径与 cardId 不匹配"
+            }
+            require(loadedTemplatePaths.add(target.path)) { "宿主 registry 包含重复模板路径" }
+            require(cardId !in loadedCards) { "宿主 registry 包含重复 cardId" }
+            val displayName = item.optString("displayName", business).trim()
+            require(
+                displayName.codePointCount(0, displayName.length) in 1..80 &&
+                    displayName.none(::isUnsafeDisplayCharacter),
+            ) { "宿主 registry 卡片名称无效" }
+            val hash = item.optString("sha256")
+            require(hash.matches(Regex("[a-f0-9]{64}"))) { "宿主 registry 模板摘要无效" }
+            val notificationId = item.optInt("notificationId")
+            require(notificationId in 620_000..719_999 && loadedNotificationIds.add(notificationId)) {
+                "宿主 registry notificationId 无效或重复"
+            }
+            val rearParam = item.optString("rearParam", "{}")
+            val focusParam = item.optString("focusParam", "{}")
+            require(rearParam.toByteArray().size + focusParam.toByteArray().size <= 128 * 1024) {
+                "宿主 registry 卡片参数过大"
+            }
+            JSONObject(rearParam)
+            JSONObject(focusParam)
+            val updatedAt = item.optLong("updatedAt")
+            require(updatedAt >= 0L) { "宿主 registry 更新时间无效" }
+            loadedCards[cardId] = HostCard(
+                cardId = cardId,
+                business = business,
+                displayName = displayName,
+                templatePath = target.path,
+                sha256 = hash,
+                notificationId = notificationId,
+                updatedAt = updatedAt,
+                enabled = item.optBoolean("enabled"),
+                pendingDelete = item.optBoolean("pendingDelete"),
+                rearParam = rearParam,
+                focusParam = focusParam,
+            )
+        }
+        return loadedCards
+    }
+
+    private fun recoverHostInstallTransactions(registryCards: Map<String, HostCard>) {
+        val directory = registryDir()
+        if (!directory.exists()) return
+        require(directory.isDirectory && !Files.isSymbolicLink(directory.toPath())) {
+            "Host install transaction 目录不安全"
+        }
+        val children = directory.listFiles() ?: error("无法扫描 Host install transaction")
+        val journals = children.mapNotNull { file ->
+            val match = INSTALL_JOURNAL_NAME.matchEntire(file.name) ?: return@mapNotNull null
+            match.groupValues[1] to file
+        }
+        require(journals.size <= MAX_REGISTRY_RECORDS) { "Host install transaction 数量过多" }
+        journals.forEach { (cardId, file) ->
+            val expected = installJournalFile(cardId)
+            require(file.canonicalFile == expected.canonicalFile) { "Host install journal 路径不安全" }
+            require(file.isFile && file.length() in 1..MAX_INSTALL_JOURNAL_BYTES) {
+                "Host install journal 大小无效"
+            }
+            val journal = HostInstallJournalCodec.decode(
+                readTextBounded(file, MAX_INSTALL_JOURNAL_BYTES, "Host install journal"),
+            )
+            require(journal.cardId == cardId) { "Host install journal 与文件名不匹配" }
+            recoverHostInstallTransaction(
+                journal,
+                registryCards[cardId]?.let(::hostCardFingerprint),
+            )
+        }
+        cleanupOrphanInstallSidecars()
+    }
+
+    private fun recoverHostInstallTransactionIfPresent(cardId: String, registryCard: HostCard?) {
+        val journalFile = installJournalFile(cardId)
+        if (!journalFile.exists()) return
+        require(journalFile.isFile && journalFile.length() in 1..MAX_INSTALL_JOURNAL_BYTES) {
+            "Host install journal 大小无效"
+        }
+        val journal = HostInstallJournalCodec.decode(
+            readTextBounded(journalFile, MAX_INSTALL_JOURNAL_BYTES, "Host install journal"),
+        )
+        require(journal.cardId == cardId) { "Host install journal cardId 不匹配" }
+        recoverHostInstallTransaction(journal, registryCard?.let(::hostCardFingerprint))
+    }
+
+    private fun recoverHostInstallTransaction(
+        journal: HostInstallJournal,
+        registryFingerprint: String?,
+    ) {
+        val target = managedTemplateFile(journal.cardId)
+        val staging = installStagingFile(journal.cardId)
+        val backup = installBackupFile(journal.cardId)
+        when (
+            HostInstallJournalCodec.recovery(
+                journal = journal,
+                registryFingerprint = registryFingerprint,
+                targetSha256 = existingTransactionFileSha(target),
+                stagingSha256 = existingTransactionFileSha(staging),
+                backupSha256 = existingTransactionFileSha(backup),
+            )
+        ) {
+            HostInstallRecovery.KEEP_NEW,
+            HostInstallRecovery.KEEP_OLD
+            -> Unit
+            HostInstallRecovery.RESTORE_NEW -> {
+                copyTransactionFileAtomically(staging, target, journal.newTargetSha256)
+                check(target.setReadable(true, false)) { "无法恢复新 Host 模板读取权限" }
+            }
+            HostInstallRecovery.RESTORE_OLD -> {
+                copyTransactionFileAtomically(backup, target, requireNotNull(journal.oldTargetSha256))
+                check(target.setReadable(true, false)) { "无法恢复旧 Host 模板读取权限" }
+            }
+            HostInstallRecovery.DELETE_NEW_TARGET -> {
+                if (Files.deleteIfExists(target.toPath())) syncDirectory(requireNotNull(target.parentFile))
+            }
+        }
+        if (registryFingerprint == journal.newRegistryFingerprint) {
+            finishCommittedHostInstallTransaction(journal)
+        } else {
+            finishHostInstallTransaction(journal.cardId)
+        }
+        YLog.info("[$TAG] recovered Host install transaction cardId=${journal.cardId}")
+    }
+
+    private fun finishCommittedHostInstallTransaction(journal: HostInstallJournal) {
+        journal.oldTemplatePath?.let { path ->
+            val oldTarget = File(path).canonicalFile
+            val currentTarget = managedTemplateFile(journal.cardId).canonicalFile
+            require(oldTarget.path == path && isTemplateForCard(oldTarget, journal.cardId)) {
+                "Host install journal 旧模板路径不安全"
+            }
+            require(!Files.isSymbolicLink(oldTarget.toPath())) {
+                "拒绝清理符号链接形式的 Host 旧模板"
+            }
+            if (oldTarget != currentTarget && Files.deleteIfExists(oldTarget.toPath())) {
+                syncDirectory(requireNotNull(oldTarget.parentFile))
+            }
+        }
+        finishHostInstallTransaction(journal.cardId)
+    }
+
+    private fun finishHostInstallTransaction(cardId: String) {
+        deleteInstallSidecar(installBackupFile(cardId))
+        deleteInstallSidecar(installStagingFile(cardId))
+        // The journal is the recovery authority and must be removed last.
+        deleteInstallSidecar(installJournalFile(cardId))
+    }
+
+    private fun cleanupOrphanInstallSidecars() {
+        val directory = registryDir()
+        if (!directory.isDirectory) return
+        directory.listFiles().orEmpty()
+            .filter { file -> INSTALL_ORPHAN_NAME.matches(file.name) }
+            .forEach(::deleteInstallSidecar)
+        val templateDirectory = File(templateBase()).canonicalFile
+        if (!templateDirectory.isDirectory || Files.isSymbolicLink(templateDirectory.toPath())) return
+        templateDirectory.listFiles().orEmpty()
+            .filter { file -> INSTALL_TARGET_TEMP_NAME.matches(file.name) }
+            .forEach { file ->
+                require(file.absoluteFile.parentFile == templateDirectory && !Files.isSymbolicLink(file.toPath())) {
+                    "拒绝删除非托管 Host target 临时文件"
+                }
+                require(file.canonicalFile.parentFile == templateDirectory) {
+                    "Host target 临时文件越出受管目录"
+                }
+                if (Files.deleteIfExists(file.toPath())) syncDirectory(templateDirectory)
+            }
+    }
+
+    private fun deleteInstallSidecar(file: File) {
+        val directory = registryDir()
+        require(file.absoluteFile.parentFile == directory && !Files.isSymbolicLink(file.toPath())) {
+            "拒绝删除非托管 Host install sidecar"
+        }
+        require(file.canonicalFile.parentFile == directory.canonicalFile) {
+            "Host install sidecar 越出 registry 目录"
+        }
+        if (Files.deleteIfExists(file.toPath())) syncDirectory(directory)
+    }
+
+    private fun moveIncomingTemplateToStaging(source: File, staging: File) {
+        val directory = registryDir()
+        require(source.isFile && source.absoluteFile.parentFile == directory) {
+            "Host install incoming template 路径不安全"
+        }
+        require(staging.absoluteFile.parentFile == directory && !staging.exists()) {
+            "Host install staging 路径不安全"
+        }
+        Files.move(source.toPath(), staging.toPath(), StandardCopyOption.ATOMIC_MOVE)
+        syncDirectory(directory)
+    }
+
+    private fun copyTransactionFileAtomically(source: File, target: File, expectedSha256: String) {
+        require(source.isFile && !Files.isSymbolicLink(source.toPath())) {
+            "Host install transaction 源文件无效"
+        }
+        require(source.length() in 1..MAX_TEMPLATE_BYTES) { "Host install transaction 源文件大小无效" }
+        val parent = requireNotNull(target.absoluteFile.parentFile) { "Host install target 缺少父目录" }
+        require(parent.isDirectory && !Files.isSymbolicLink(parent.toPath())) {
+            "Host install target 父目录不安全"
+        }
+        require(!Files.isSymbolicLink(target.toPath()) && target.canonicalFile.parentFile == parent.canonicalFile) {
+            "Host install target 路径不安全"
+        }
+        val temp = File.createTempFile(".outerview_install_write_", ".tmp", parent)
+        try {
+            source.inputStream().buffered().use { input ->
+                FileOutputStream(temp, false).use { output ->
+                    val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+                    var total = 0L
+                    while (true) {
+                        val read = input.read(buffer)
+                        if (read < 0) break
+                        if (read == 0) continue
+                        total += read
+                        require(total <= MAX_TEMPLATE_BYTES) { "Host install template 超过 16 MB" }
+                        output.write(buffer, 0, read)
+                    }
+                    require(total > 0L) { "Host install template 为空" }
+                    output.fd.sync()
+                }
+            }
+            require(sha256(temp) == expectedSha256) { "Host install transaction 副本摘要不匹配" }
+            Files.move(
+                temp.toPath(),
+                target.toPath(),
+                StandardCopyOption.ATOMIC_MOVE,
+                StandardCopyOption.REPLACE_EXISTING,
+            )
+            syncDirectoryAfterCommit(parent, "Host install template")
+        } finally {
+            deleteAtomicTempBestEffort(temp, "Host install template")
+        }
+    }
+
+    private fun existingTransactionFileSha(file: File): String? {
+        if (!file.exists()) return null
+        require(file.isFile && !Files.isSymbolicLink(file.toPath())) {
+            "Host install transaction 文件无效"
+        }
+        require(file.length() in 1..MAX_TEMPLATE_BYTES) { "Host install transaction 文件大小无效" }
+        return sha256(file)
+    }
+
+    private fun isVerifiedHostCard(card: HostCard): Boolean = runCatching {
+        val target = File(card.templatePath).canonicalFile
+        require(isTemplateForCard(target, card.cardId)) { "Host card target 路径不安全" }
+        existingTransactionFileSha(target) == card.sha256
+    }.getOrDefault(false)
+
+    private fun syncDirectory(directory: File) {
+        val descriptor = Os.open(
+            directory.absolutePath,
+            OsConstants.O_RDONLY,
+            0,
+        )
+        try {
+            Os.fsync(descriptor)
+        } finally {
+            Os.close(descriptor)
+        }
+    }
+
+    private fun syncDirectoryAfterCommit(directory: File, label: String) {
+        runCatching { syncDirectory(directory) }
+            .onFailure { error -> YLog.warn("[$TAG] $label committed; directory fsync failed", error) }
+    }
+
+    private fun deleteAtomicTempBestEffort(temp: File, label: String) {
+        runCatching { Files.deleteIfExists(temp.toPath()) }
+            .onFailure { error -> YLog.warn("[$TAG] $label temp cleanup failed", error) }
+    }
 
     private fun businessPath(business: String): String? =
         cards.values.firstOrNull { it.business == business }?.templatePath
 
     private fun loadRegistry() {
         synchronized(registryLock) {
-            val file = registryFile().takeIf(File::isFile) ?: legacyRegistryFile()
-            if (!file.isFile) return
+            val currentFile = runCatching { registryFile() }.getOrElse { error ->
+                registryWriteBlocked = true
+                YLog.error("[$TAG] registry path validation failed; writes blocked", error)
+                return
+            }
+            if (!currentFile.isFile) {
+                runCatching {
+                    recoverHostInstallTransactions(emptyMap())
+                    cards.clear()
+                    suppressedBusinesses.clear()
+                    pendingBulkBusinesses.clear()
+                    pendingBulkTemplates.clear()
+                }.onSuccess {
+                    registryWriteBlocked = false
+                }.onFailure { error ->
+                    registryWriteBlocked = true
+                    YLog.error("[$TAG] install recovery without registry failed; writes blocked", error)
+                }
+                return
+            }
             runCatching {
-                val root = JSONObject(file.readText())
-                val array = root.optJSONArray("cards") ?: JSONArray()
-                for (index in 0 until array.length()) {
-                    val item = array.optJSONObject(index) ?: continue
-                    val cardId = item.optString("cardId")
-                    val business = item.optString("business")
-                    val path = item.optString("templatePath")
-                    val target = File(path)
-                    if (!ManagedHostPaths.matchesBusiness(cardId, business) ||
-                        !isManagedTemplate(target) || !target.isFile
-                    ) continue
-                    val enabled = item.optBoolean("enabled")
-                    val pendingDelete = item.optBoolean("pendingDelete")
-                    cards[cardId] = HostCard(
-                        cardId = cardId,
-                        business = business,
-                        displayName = item.optString("displayName", business),
-                        templatePath = path,
-                        sha256 = item.optString("sha256"),
-                        notificationId = item.optInt("notificationId"),
-                        updatedAt = item.optLong("updatedAt"),
-                        enabled = enabled,
-                        pendingDelete = pendingDelete,
-                        rearParam = item.optString("rearParam", "{}"),
-                        focusParam = item.optString("focusParam", "{}"),
-                    )
-                    if (!enabled || pendingDelete) suppressedBusinesses.add(business)
+                val root = JSONObject(readTextBounded(currentFile, MAX_REGISTRY_BYTES, "宿主 registry"))
+                val loadedCards = decodeRegistryCards(root)
+                val loadedSuppressed = loadedCards.values
+                    .filterTo(linkedSetOf()) { card -> !card.enabled || card.pendingDelete }
+                    .mapTo(linkedSetOf()) { card -> card.business }
+                recoverHostInstallTransactions(loadedCards)
+                loadedCards.values.forEach { card ->
+                    if (!card.pendingDelete && !isVerifiedHostCard(card)) {
+                        loadedSuppressed.add(card.business)
+                        YLog.warn(
+                            "[$TAG] Host card target missing or digest mismatch; runtime restore blocked " +
+                                "cardId=${card.cardId}",
+                        )
+                    }
                 }
                 val pendingBusinesses = root.optJSONArray("pendingBulkBusinesses") ?: JSONArray()
+                require(pendingBusinesses.length() <= MAX_REGISTRY_RECORDS) {
+                    "宿主 registry 待删除 business 数量过多"
+                }
+                val verifiedOwnership = loadedCards.values.map { card ->
+                    VerifiedHostCardOwnership(
+                        business = card.business,
+                        templatePath = File(card.templatePath).canonicalPath,
+                        pendingDelete = card.pendingDelete,
+                    )
+                }
+                val loadedPendingBusinesses = linkedSetOf<String>()
                 for (index in 0 until pendingBusinesses.length()) {
                     val business = pendingBusinesses.optString(index)
                     val cardId = business
                         .removePrefix(ManagedHostPaths.BusinessPrefix)
                         .removePrefix(ManagedHostPaths.LegacyBusinessPrefix)
-                    if (ManagedHostPaths.matchesBusiness(cardId, business)) {
-                        pendingBulkBusinesses.add(business)
-                        suppressedBusinesses.add(business)
+                    require(ManagedHostPaths.matchesBusiness(cardId, business)) {
+                        "宿主 registry 待删除 business 无效"
                     }
+                    if (!HostPendingCleanupPolicy.canRestoreBusiness(business, verifiedOwnership)) {
+                        YLog.warn("[$TAG] dropped unowned legacy pending business=$business")
+                        continue
+                    }
+                    require(loadedPendingBusinesses.add(business)) {
+                        "宿主 registry 包含重复待删除 business"
+                    }
+                    loadedSuppressed.add(business)
                 }
                 val pendingTemplates = root.optJSONArray("pendingBulkTemplates") ?: JSONArray()
-                for (index in 0 until pendingTemplates.length()) {
-                    val target = File(pendingTemplates.optString(index))
-                    if (isManagedTemplate(target)) {
-                        pendingBulkTemplates.add(target.absolutePath)
-                        pendingBulkBusinesses.add(target.name)
-                        suppressedBusinesses.add(target.name)
-                    }
+                require(pendingTemplates.length() <= MAX_REGISTRY_RECORDS) {
+                    "宿主 registry 待删除模板数量过多"
                 }
-            }.onFailure { YLog.error("[$TAG] registry load failed", it) }
+                val loadedPendingTemplates = linkedSetOf<String>()
+                for (index in 0 until pendingTemplates.length()) {
+                    val target = File(pendingTemplates.optString(index)).canonicalFile
+                    val canRestore = HostPendingCleanupPolicy.canRestoreTemplate(
+                        business = target.name,
+                        canonicalPath = target.path,
+                        currentNamespaceManaged = isManagedTemplate(target),
+                        verifiedCards = verifiedOwnership,
+                    )
+                    if (!canRestore) {
+                        YLog.warn("[$TAG] dropped unowned legacy pending template=${target.path}")
+                        continue
+                    }
+                    require(loadedPendingTemplates.add(target.path)) {
+                        "宿主 registry 包含重复待删除模板"
+                    }
+                    loadedPendingBusinesses.add(target.name)
+                    loadedSuppressed.add(target.name)
+                }
+
+                cards.clear()
+                cards.putAll(loadedCards)
+                suppressedBusinesses.clear()
+                suppressedBusinesses.addAll(loadedSuppressed)
+                pendingBulkBusinesses.clear()
+                pendingBulkBusinesses.addAll(loadedPendingBusinesses)
+                pendingBulkTemplates.clear()
+                pendingBulkTemplates.addAll(loadedPendingTemplates)
+            }.onSuccess {
+                registryWriteBlocked = false
+            }.onFailure {
+                registryWriteBlocked = true
+                YLog.error("[$TAG] registry load failed; writes blocked to preserve the file", it)
+            }
         }
     }
 
-    private fun writeRegistry() = synchronized(registryLock) {
-        val dir = registryDir()
-        if (!dir.exists()) check(dir.mkdirs()) { "无法创建宿主 registry 目录" }
+    private fun readTextBounded(file: File, maxBytes: Long, label: String): String {
+        require(file.isFile && file.length() in 1..maxBytes) { "$label 文件大小无效" }
+        val output = ByteArrayOutputStream(file.length().toInt())
+        file.inputStream().buffered().use { input ->
+            val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+            var total = 0L
+            while (true) {
+                val read = input.read(buffer)
+                if (read < 0) break
+                if (read == 0) continue
+                total += read
+                require(total <= maxBytes) { "$label 文件过大" }
+                output.write(buffer, 0, read)
+            }
+        }
+        return output.toString(Charsets.UTF_8.name())
+    }
+
+    private fun isUnsafeDisplayCharacter(character: Char): Boolean =
+        character.isISOControl() || character in '\u202a'..'\u202e' ||
+            character in '\u2066'..'\u2069' || character == '\u200e' ||
+            character == '\u200f' || character == '\u061c'
+
+    private fun registryStateSnapshot() = RegistryStateSnapshot(
+        cards = cards.toMap(),
+        suppressedBusinesses = suppressedBusinesses.toSet(),
+        pendingBulkBusinesses = pendingBulkBusinesses.toSet(),
+        pendingBulkTemplates = pendingBulkTemplates.toSet(),
+    )
+
+    private fun restoreRegistryState(snapshot: RegistryStateSnapshot) {
+        cards.clear()
+        cards.putAll(snapshot.cards)
+        suppressedBusinesses.clear()
+        suppressedBusinesses.addAll(snapshot.suppressedBusinesses)
+        pendingBulkBusinesses.clear()
+        pendingBulkBusinesses.addAll(snapshot.pendingBulkBusinesses)
+        pendingBulkTemplates.clear()
+        pendingBulkTemplates.addAll(snapshot.pendingBulkTemplates)
+    }
+
+    private fun encodeRegistry(
+        cardValues: Collection<HostCard> = cards.values,
+        pendingBusinesses: Collection<String> = pendingBulkBusinesses,
+        pendingTemplates: Collection<String> = pendingBulkTemplates,
+    ): ByteArray {
+        require(cardValues.size <= MAX_REGISTRY_RECORDS) { "宿主 registry 卡片数量过多" }
+        val normalizedCards = cardValues.map { card ->
+            val target = File(card.templatePath).canonicalFile
+            require(
+                ManagedHostPaths.matchesBusiness(card.cardId, card.business) &&
+                    isTemplateForCard(target, card.cardId),
+            ) { "宿主 registry 卡片身份或路径无效" }
+            card.copy(templatePath = target.path)
+        }
+        require(normalizedCards.map { it.cardId }.distinct().size == normalizedCards.size) {
+            "宿主 registry cardId 重复"
+        }
+        require(normalizedCards.map { it.templatePath }.distinct().size == normalizedCards.size) {
+            "宿主 registry 模板路径重复"
+        }
+        require(normalizedCards.all { it.notificationId in 620_000..719_999 } &&
+            normalizedCards.map { it.notificationId }.distinct().size == normalizedCards.size
+        ) {
+            "宿主 registry notificationId 重复"
+        }
+        require(pendingBusinesses.size <= MAX_REGISTRY_RECORDS) {
+            "宿主 registry 待删除 business 数量过多"
+        }
+        require(pendingTemplates.size <= MAX_REGISTRY_RECORDS) {
+            "宿主 registry 待删除模板数量过多"
+        }
+        val registryOwnedTemplatePaths = normalizedCards.mapTo(HashSet()) { it.templatePath }
+        val normalizedPendingTemplates = pendingTemplates.map { path ->
+            File(path).canonicalFile.also { target ->
+                require(
+                    isManagedTemplate(target) || target.path in registryOwnedTemplatePaths,
+                ) { "宿主 registry 待删除模板路径无效" }
+            }.path
+        }.toSet()
+        require(normalizedPendingTemplates.size == pendingTemplates.size) {
+            "宿主 registry 待删除模板路径重复"
+        }
         val array = JSONArray()
-        cards.values.sortedBy { it.cardId }.forEach { card ->
+        normalizedCards.sortedBy { it.cardId }.forEach { card ->
             array.put(JSONObject().put("cardId", card.cardId).put("business", card.business)
                 .put("displayName", card.displayName).put("templatePath", card.templatePath)
                 .put("sha256", card.sha256).put("notificationId", card.notificationId)
@@ -1343,45 +2094,56 @@ class CustomRearCardHook : YukiBaseHooker() {
                 .put("pendingDelete", card.pendingDelete)
                 .put("rearParam", card.rearParam).put("focusParam", card.focusParam))
         }
+        val pendingBusinessArray = JSONArray().apply { pendingBusinesses.sorted().forEach(::put) }
+        val pendingTemplateArray = JSONArray().apply { normalizedPendingTemplates.sorted().forEach(::put) }
+        return JSONObject()
+            .put("schemaVersion", 5)
+            .put("cards", array)
+            .put("pendingBulkBusinesses", pendingBusinessArray)
+            .put("pendingBulkTemplates", pendingTemplateArray)
+            .toString()
+            .toByteArray(Charsets.UTF_8)
+            .also { bytes ->
+                require(bytes.size <= MAX_REGISTRY_BYTES) { "宿主 registry 超过 2 MB，已拒绝写入" }
+            }
+    }
+
+    private fun writeRegistry() = synchronized(registryLock) {
+        check(!registryWriteBlocked) { "宿主 registry 无法安全读取；已阻止覆盖" }
+        val bytes = encodeRegistry()
+        val dir = registryDir()
+        check(dir.isDirectory || dir.mkdirs()) { "无法创建宿主 registry 目录" }
+        require(!Files.isSymbolicLink(dir.toPath())) { "宿主 registry 目录不允许使用符号链接" }
         val target = registryFile()
-        val atomic = AtomicFile(target)
-        val output = atomic.startWrite()
-        try {
-            val pendingBusinesses = JSONArray().apply {
-                pendingBulkBusinesses.sorted().forEach(::put)
-            }
-            val pendingTemplates = JSONArray().apply {
-                pendingBulkTemplates.sorted().forEach(::put)
-            }
-            output.write(
-                JSONObject()
-                    .put("schemaVersion", 5)
-                    .put("cards", array)
-                    .put("pendingBulkBusinesses", pendingBusinesses)
-                    .put("pendingBulkTemplates", pendingTemplates)
-                    .toString()
-                    .toByteArray(),
-            )
-            atomic.finishWrite(output)
-        } catch (error: Throwable) {
-            atomic.failWrite(output)
-            throw error
-        }
+        writeFileAtomically(target, bytes, MAX_REGISTRY_BYTES, "宿主 registry")
         target.setReadable(true, true)
     }
 
-    private fun validateTemplate(file: File) {
-        require(file.isFile && file.length() in 1..MAX_TEMPLATE_BYTES) { "模板文件无效" }
-        ZipFile(file).use { zip ->
-            require(zip.size() <= 1024) { "模板条目过多" }
-            val entry = zip.getEntry("manifest.xml") ?: error("顶层缺少 manifest.xml")
-            val bytes = zip.getInputStream(entry).use { it.readBytes() }
-            require(bytes.size <= 2 * 1024 * 1024) { "manifest.xml 过大" }
-            val document = SecureManifestXml.parse(bytes)
-            require(document.documentElement.tagName == "Widget") { "根节点必须是 Widget" }
-            require(document.documentElement.getAttribute("version") == "2") { "只支持 Widget version=2" }
+    private fun writeFileAtomically(target: File, bytes: ByteArray, maxBytes: Long, label: String) {
+        require(bytes.size.toLong() <= maxBytes) { "$label 超过大小限制" }
+        val parent = requireNotNull(target.absoluteFile.parentFile) { "$label 缺少父目录" }
+        require(parent.isDirectory && !Files.isSymbolicLink(parent.toPath())) { "$label 父目录不安全" }
+        require(!Files.isSymbolicLink(target.toPath())) { "$label 不允许使用符号链接" }
+        require(target.canonicalFile.parentFile == parent.canonicalFile) { "$label 越出受管目录" }
+        val temp = File.createTempFile(".outerview_write_", ".tmp", parent)
+        try {
+            FileOutputStream(temp, false).use { output ->
+                output.write(bytes)
+                output.fd.sync()
+            }
+            Files.move(
+                temp.toPath(),
+                target.toPath(),
+                StandardCopyOption.ATOMIC_MOVE,
+                StandardCopyOption.REPLACE_EXISTING,
+            )
+            syncDirectoryAfterCommit(parent, label)
+        } finally {
+            deleteAtomicTempBestEffort(temp, label)
         }
     }
+
+    private fun validateTemplate(file: File): String = SmartAssistantTemplateValidator.inspect(file).sha256
 
     private fun parseBusiness(extras: Bundle): String? {
         val known = cards.values.map { it.business }.toSet() + suppressedBusinesses
@@ -1429,6 +2191,10 @@ class CustomRearCardHook : YukiBaseHooker() {
 
     private fun managerOuterViewBusinesses(): Set<String> {
         if (manager == null) return emptySet()
+        val ownedLegacyBusinesses = cards.values.asSequence()
+            .map { it.business }
+            .filter(ManagedHostPaths::isLegacyBusiness)
+            .toSet()
         return runOnMainThread {
             val target = manager ?: return@runOnMainThread emptySet()
             val list = runCatching {
@@ -1440,8 +2206,7 @@ class CustomRearCardHook : YukiBaseHooker() {
                 val pkg = widgetPackage(extras, business)
                 business.takeIf {
                     pkg == TESTER_PACKAGE &&
-                        (it.startsWith(ManagedHostPaths.BusinessPrefix) ||
-                            it.startsWith(ManagedHostPaths.LegacyBusinessPrefix))
+                        (ManagedHostPaths.isCurrentBusiness(it) || it in ownedLegacyBusinesses)
                 }
             }.toSet()
         }
@@ -1494,7 +2259,11 @@ class CustomRearCardHook : YukiBaseHooker() {
     private fun persistentBusinesses(): Set<String> {
         val file = notificationWidgetFile()
         return runCatching {
-            val raw = file.readText().removePrefix("\uFEFF")
+            val raw = readTextBounded(
+                file,
+                MAX_NOTIFICATION_STATE_BYTES,
+                "宿主 notification state",
+            ).removePrefix("\uFEFF")
             val array = JSONArray(raw)
             (0 until array.length()).mapNotNull {
                 array.optJSONObject(it)?.optJSONObject("extra")?.optString("business")?.takeIf(String::isNotBlank)

@@ -1,5 +1,10 @@
 # OuterView 2.3.0
 
+> 历史发布公告存档。当次代码变更的权威清单见根目录 [CHANGELOG.md](../CHANGELOG.md)；
+> 许可证与来源边界以 [LICENSE_TRANSITION.md](LICENSE_TRANSITION.md) 为准。
+> 文中关于项目来源与 About 页面的表述反映发布当时状态，此后项目已按
+> LICENSE_TRANSITION.md 完成与 REAREye 的工程隔离。
+
 OuterView 2.3.0 新增完整的背屏壁纸管理能力，并恢复 Assistant 与 Wallpaper Hook 共存。
 
 ## 新功能

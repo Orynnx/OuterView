@@ -1,6 +1,6 @@
 # Notices
 
-OuterView is licensed under the MIT License. Runtime dependency licenses,
+OuterView is licensed under GNU GPL-3.0. Runtime dependency licenses,
 copyright notices, and reproducible dependency-audit instructions are kept in
 [`LICENSES/NOTICE.md`](LICENSES/NOTICE.md).
 

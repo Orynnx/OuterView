@@ -7,7 +7,7 @@ plugins {
 }
 
 android {
-    compileSdk = 36
+    compileSdk = 37
     namespace = "org.orynnx.outerview.core"
 
     defaultConfig {
@@ -49,7 +49,7 @@ afterEvaluate {
             register<MavenPublication>("release") {
                 groupId = "org.orynnx.outerview"
                 artifactId = "fun-card-core"
-                version = "3.0.0"
+                version = "2.4.0"
                 from(components["release"])
             }
         }

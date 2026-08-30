@@ -20,6 +20,7 @@ data class CustomCardRecord(
     val advancedFocusParamJson: String? = null,
     val advancedPayload: Boolean = false,
     val desiredEnabled: Boolean = false,
+    val pendingInstall: Boolean = false,
     val cleanupPending: Boolean = false,
     val deleted: Boolean = false,
     val hostTemplatePath: String? = null,

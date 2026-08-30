@@ -1,25 +1,48 @@
 # Changelog
 
+## Unreleased
+
+- 2.4.1：放宽 Smart Assistant 卡片兼容性判据；不再强制 `Widget version="2"`，
+  可选元数据或附属 XML 异常不再误拦正常卡片，同时保留 ZIP 路径、解压大小和 XML
+  外部实体等安全防护。
+
+- 全面迁移管理页到 MIUIX `Scaffold`、TopAppBar、底部导航和标准对话框，补齐返回手势、
+  加载/错误态、48 dp 触控目标以及窄屏布局。
+- Host API 增加签名权限与调用方身份校验；卡片和壁纸的导入、替换、删除改用严格归属、
+  流式大小限制、原子写入和可恢复事务。
+- 扫描包内全部 XML；壁纸拒绝 Intent、外部命令、反射、外部数据和系统控制能力，卡片在
+  导入前展示完整风险确认。
+- 壁纸的当前项只采用宿主 widget 列表和索引的权威读回，未知或切换中的状态一律禁止删除。
+- 更新器改为规范 GitHub Release、语义版本、包名与签名谱系校验，并限制下载与重定向。
+- 升级 Gradle 9.6.1、compileSdk 37，固定 CI action 提交，关闭应用数据备份并扩展安全测试。
+
 ## 2.4.0 - 2026-08-25
 
 - 修复用户从系统背屏中心直接移除卡片后，OuterView 刷新再次强制恢复卡片的问题。
 - 修复系统侧切换到非 OuterView 壁纸后，旧的当前标记覆盖外部选择和阻止删除的问题。
 - 修复壁纸应用失败时提前写入当前标记造成的状态不一致。
 - 移除关于页面中不必要的项目身份说明文本。
+- 实现来源声明：自本版本起，代码库作为 LLM 辅助重写版本维护，由版权所有者
+  Orynnx 按 GNU GPL-3.0 发布；与 REAREye 全部历史源码的表达独立性由 CI 相似度
+  门禁（精确文件、20 连续行、120 token、300 结构 token、函数级）持续校验。
+- 修正根 NOTICE.md 的许可证表述，与 LICENSE（GPL-3.0）保持一致。
+- `.gitattributes` 锁定 `*.xml`、`*.json` 为 LF 行尾，Hello Card 构建在 Windows
+  与 Linux 上字节级可复现。
+- CHANGELOG 移除过期的 3.0.0 条目，许可证迁移以 2.3.2 为准；`docs/RELEASE_2.x`
+  两份发布公告转为历史公告存档。
 
-## 3.0.0 - 2026-08-24
+## 2.3.2 - 2026-08-24
 
+- 许可证迁移版本：自该版本起的新分发由版权所有者 Orynnx 按 GNU GPL-3.0 发布；
+  此前已按其他许可证发布或取得的副本仍按其取得时的条款处理，详见
+  `docs/LICENSE_TRANSITION.md`。
 - 移除 DexKit、MMKV 和复制自 REAREye 的四个工具文件，以项目自有 DEX 查询器和
   BSD-3-Clause 的 `smali-dexlib2` 重新实现 HyperOS 4 Hook 入口发现与缓存。
 - 将 Core/AIDL 命名空间迁移至 `org.orynnx.outerview.core`，新卡片改用
   `outerview_custom_` 标识；旧标识只保留受控数据迁移兼容。
 - 删除许可证无法随包核验的 Dino Run 媒体，加入只含原创 MAML 图形和文本的 Hello Card。
-- 对 REAREye 全部 170 个提交、844 个历史源码 blob 建立相似代码门禁，并加入实际解析
-  runtime classpath 的依赖许可证审计工具。
-- 当前工作树切换为 MIT License；2.x 标签和旧提交继续保持原 GPL-3.0 许可。
-
-## 2.3.2 - 2026-08-24
-
+- 对 REAREye 全部历史提交建立相似代码门禁，并加入实际解析 runtime classpath 的
+  依赖许可证审计工具。
 - 兼容 HyperOS 4 的 Smart Assistant 原生 Post Runnable：运行时解析 MainPanel 宿主对象，恢复自定义卡片启用和加载。
 - 修复 HyperOS 4 背屏壁纸 Widget 工厂的定位规则：按运行时规格类型和 `snapshotPath_` 解析，恢复自定义壁纸注入、原生切换与选择持久化。
 - 在已 Root 的 HyperOS 4 真机上验证卡片和壁纸均可由背屏中心原生加载。

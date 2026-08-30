@@ -94,7 +94,10 @@ class RearCardWorkflowTest {
 
     @Test
     fun deletePolicyHandlesEnabledAndOfflineCleanup() {
-        val enabled = record(state = RearCardState.INSTALLED_ENABLED).copy(desiredEnabled = true)
+        val enabled = record(state = RearCardState.INSTALLED_ENABLED).copy(
+            desiredEnabled = true,
+            pendingInstall = true,
+        )
         assertTrue(RearCardWorkflow.shouldHide(enabled, notificationActive = false))
         assertTrue(RearCardWorkflow.needsHostCleanup(enabled))
 
@@ -102,7 +105,68 @@ class RearCardWorkflowTest {
         assertTrue(tombstone.deleted)
         assertTrue(tombstone.cleanupPending)
         assertFalse(tombstone.desiredEnabled)
+        assertFalse(tombstone.pendingInstall)
         assertEquals("pending", tombstone.lastMessage)
+    }
+
+    @Test
+    fun `delete tombstone distinguishes local-only and ambiguous host cleanup`() {
+        val localOnly = RearCardWorkflow.deletionTombstone(
+            record(RearCardState.NOT_INSTALLED),
+            message = "delete",
+            now = 10L,
+        )
+        val ambiguousInstall = RearCardWorkflow.deletionTombstone(
+            record(RearCardState.NOT_INSTALLED).copy(pendingInstall = true),
+            message = "delete",
+            now = 20L,
+        )
+
+        assertTrue(localOnly.deleted)
+        assertFalse(localOnly.cleanupPending)
+        assertFalse(localOnly.pendingInstall)
+        assertTrue(ambiguousInstall.deleted)
+        assertTrue(ambiguousInstall.cleanupPending)
+        assertFalse(ambiguousInstall.pendingInstall)
+    }
+
+    @Test
+    fun `host deletion replay never resurrects a tombstone`() {
+        val pending = RearCardWorkflow.deletionTombstone(
+            record(RearCardState.INSTALLED_DISABLED).copy(hostTemplatePath = "/host/template"),
+            message = "delete",
+            now = 10L,
+        )
+        val failed = RearCardWorkflow.hostCleanupResult(
+            record = pending,
+            success = false,
+            cleanupStillPending = false,
+            message = "offline",
+            commandId = "cleanup-1",
+            now = 20L,
+        )
+        val hostAlreadyAbsent = RearCardWorkflow.hostCleanupResult(
+            record = failed,
+            success = true,
+            cleanupStillPending = false,
+            message = "absent",
+            commandId = "cleanup-2",
+            now = 30L,
+        )
+        val localFailure = RearCardWorkflow.localCleanupFailed(
+            hostAlreadyAbsent,
+            message = "locked",
+            now = 40L,
+        )
+
+        assertTrue(failed.deleted)
+        assertTrue(failed.cleanupPending)
+        assertTrue(hostAlreadyAbsent.deleted)
+        assertFalse(hostAlreadyAbsent.cleanupPending)
+        assertEquals(null, hostAlreadyAbsent.hostTemplatePath)
+        assertTrue(localFailure.deleted)
+        assertFalse(localFailure.cleanupPending)
+        assertFalse(RearCardWorkflow.needsHostCleanup(localFailure))
     }
 
     private fun record(state: RearCardState) = CustomCardRecord(

@@ -49,7 +49,7 @@ class FunCardHostClient {
 
     fun listSystemTemplates(): List<SystemTemplateInfo> {
         val bundle = requireRemote().listSystemTemplates()
-        return bundle.getParcelableArrayList<Bundle>(FunCardHostContract.Keys.ITEMS).orEmpty().map {
+        return bundle.getParcelableArrayList(FunCardHostContract.Keys.ITEMS, Bundle::class.java).orEmpty().map {
             SystemTemplateInfo(
                 business = it.getString(FunCardHostContract.Keys.BUSINESS).orEmpty(),
                 displayName = it.getString(FunCardHostContract.Keys.DISPLAY_NAME).orEmpty(),
@@ -63,7 +63,7 @@ class FunCardHostClient {
 
     fun listHostCards(): List<HostCardInfo> {
         val bundle = requireRemote().listHostCards()
-        return bundle.getParcelableArrayList<Bundle>(FunCardHostContract.Keys.ITEMS).orEmpty().map {
+        return bundle.getParcelableArrayList(FunCardHostContract.Keys.ITEMS, Bundle::class.java).orEmpty().map {
             HostCardInfo(
                 cardId = it.getString(FunCardHostContract.Keys.CARD_ID).orEmpty(),
                 business = it.getString(FunCardHostContract.Keys.BUSINESS).orEmpty(),
