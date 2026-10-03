@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">OuterView</string>
-    <string name="xposed_desc">独立的自定义背屏卡片管理器与宿主 Hook</string>
+    <string name="xposed_desc">小米背屏智能应用管理器，通过主题壁纸原生流程导入、恢复和移除本地应用包</string>
 </resources>

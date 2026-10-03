@@ -93,7 +93,7 @@ object AppUpdateManager {
     )
 
     suspend fun checkLatest(currentVersion: String): Result<AppUpdateInfo?> = withContext(Dispatchers.IO) {
-        val normalizedCurrent = normalizeStableVersion(currentVersion)
+        val normalizedCurrent = normalizeInstalledVersion(currentVersion)
             ?: return@withContext updateFailure(
                 AppUpdateError.INVALID_VERSION,
                 "当前应用版本格式无效",
@@ -124,7 +124,7 @@ object AppUpdateManager {
                 }
                 connection.inputStream.use { input ->
                     parseReleaseResponse(
-                        currentVersion = normalizedCurrent,
+                        currentVersion = currentVersion,
                         response = readUtf8Limited(input, MaxReleaseResponseBytes),
                     )
                 }
@@ -312,12 +312,17 @@ object AppUpdateManager {
         return (1..3).joinToString(".") { match.groupValues[it] }
     }
 
+    /** Local -dev builds can check stable releases, including the matching final version. */
+    internal fun normalizeInstalledVersion(raw: String): String? =
+        normalizeStableVersion(raw.removeSuffix("-dev"))
+
     internal fun compareVersions(left: String, right: String): Int {
-        val l = parseStableVersion(left)
-            ?: throw IllegalArgumentException("Invalid stable version: $left")
-        val r = parseStableVersion(right)
-            ?: throw IllegalArgumentException("Invalid stable version: $right")
-        return compareValuesBy(l, r, VersionParts::major, VersionParts::minor, VersionParts::patch)
+        val l = normalizeInstalledVersion(left)?.let(::parseStableVersion)
+            ?: throw IllegalArgumentException("Invalid installed version: $left")
+        val r = normalizeInstalledVersion(right)?.let(::parseStableVersion)
+            ?: throw IllegalArgumentException("Invalid installed version: $right")
+        val numeric = compareValuesBy(l, r, VersionParts::major, VersionParts::minor, VersionParts::patch)
+        return if (numeric != 0) numeric else compareValues(right.endsWith("-dev"), left.endsWith("-dev"))
     }
 
     internal fun expectedAssetName(version: String): String {

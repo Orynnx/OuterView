@@ -3,142 +3,75 @@ package org.orynnx.outerview
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
-import android.os.Bundle
-import android.os.ParcelFileDescriptor
-import android.os.SystemClock
+import android.net.Uri
 import android.util.Log
 import kotlinx.coroutines.runBlocking
-import org.orynnx.outerview.core.RearCardManager
-import org.orynnx.outerview.core.internal.BoundedDeadlineCopy
-import org.orynnx.outerview.core.wallpaperapi.RearWallpaperHostClient
-import org.orynnx.outerview.core.wallpaperapi.RearWallpaperHostContract
-import java.io.ByteArrayOutputStream
+import org.json.JSONArray
+import org.json.JSONObject
+import org.orynnx.outerview.core.ai.AiAppManager
 import java.io.File
-import java.util.concurrent.TimeUnit
 
-/** ADB-only device test entry point. The debug manifest protects it with DUMP. */
+/** Device acceptance entry point; debug-only and protected by DUMP. */
 class DebugCommandReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
-        if (intent.action !in SupportedActions) return
-        val pendingResult = goAsync()
+        val action = intent.action?.removePrefix(PREFIX) ?: return
+        if (intent.action != PREFIX + action || action !in ACTIONS) return
+        val pending = goAsync()
         Thread({
             try {
-                when {
-                    intent.action == ActionTestBlockedImport -> runBlockedImportSelfTest()
-                    intent.action in WallpaperActions -> runWallpaperAction(context.applicationContext, intent)
-                    else -> runAssistantAction(context.applicationContext, intent)
-                }
-            } finally {
-                pendingResult.finish()
-            }
-        }, "OuterView-Debug-Command").start()
-    }
-
-    private fun runWallpaperAction(context: Context, intent: Intent) {
-        val action = intent.action.orEmpty()
-        val client = RearWallpaperHostClient()
-        val result = runCatching {
-            check(client.connect(context)) { "wallpaper host not connected or incompatible" }
-            when (action) {
-                ActionApplyWallpaper -> client.apply(requiredWallpaperId(intent))
-                ActionRenameWallpaper -> client.rename(
-                    requiredWallpaperId(intent),
-                    intent.getStringExtra("name") ?: error("missing name"),
-                )
-                else -> {
-                    val file = File(intent.getStringExtra("path") ?: error("missing path"))
-                    check(file.isFile) { "wallpaper file not found" }
-                    ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY).use { fd ->
-                        client.import(fd, file.name)
+                runBlocking {
+                    val manager = AiAppManager.create(context.applicationContext)
+                    val result = when (action) {
+                        "SNAPSHOT" -> {
+                            val snapshot = manager.snapshot()
+                            JSONObject().put("success", snapshot.connected)
+                                .put("message", snapshot.message)
+                                .put("cards", JSONArray().apply {
+                                    snapshot.cards.forEach { card ->
+                                        put(JSONObject().put("id", card.id).put("name", card.name)
+                                            .put("resourcePath", card.resourcePath).put("managed", card.managed)
+                                            .put("registered", card.registered))
+                                    }
+                                })
+                        }
+                        "IMPORT" -> {
+                            val source = File(requireNotNull(intent.getStringExtra("path")))
+                            require(source.canonicalFile.toPath().startsWith(context.cacheDir.canonicalFile.toPath())) {
+                                "测试导入仅允许应用 cache 目录"
+                            }
+                            val preview = manager.inspect(Uri.fromFile(source))
+                            try {
+                                val imported = manager.importCard(preview, intent.getStringExtra("name") ?: preview.name)
+                                JSONObject().put("success", imported.success).put("message", imported.message)
+                            } finally {
+                                manager.discardPreview(preview.token)
+                            }
+                        }
+                        "REMOVE" -> {
+                            val id = requireNotNull(intent.getStringExtra("id"))
+                            require(id.startsWith("outerview_ai_")) { "测试入口仅移除 OuterView 测试卡片" }
+                            val removed = manager.remove(id)
+                            JSONObject().put("success", removed.success).put("message", removed.message)
+                        }
+                        "RESTORE" -> {
+                            val restored = manager.restore(requireNotNull(intent.getStringExtra("id")))
+                            JSONObject().put("success", restored.success).put("message", restored.message)
+                        }
+                        else -> JSONObject().put("success", manager.openSystemManager(context))
                     }
+                    Log.i(TAG, "$action $result")
                 }
+            } catch (error: Throwable) {
+                Log.e(TAG, "$action " + JSONObject().put("success", false).put("message", error.message), error)
+            } finally {
+                pending.finish()
             }
-        }.getOrElse { error ->
-            Bundle().apply {
-                putBoolean(RearWallpaperHostContract.Keys.SUCCESS, false)
-                putString(RearWallpaperHostContract.Keys.MESSAGE, error.message)
-            }
-        }
-        Log.i(
-            WallpaperLogTag,
-            "action=$action id=${result.getInt(RearWallpaperHostContract.Keys.WALLPAPER_ID, Int.MIN_VALUE)} " +
-                "success=${result.getBoolean(RearWallpaperHostContract.Keys.SUCCESS)} " +
-                "message=${result.getString(RearWallpaperHostContract.Keys.MESSAGE)}",
-        )
+        }, "OuterView-AI-Acceptance").start()
     }
-
-    private fun runAssistantAction(context: Context, intent: Intent) {
-        val action = intent.action.orEmpty()
-        runCatching {
-            runBlocking {
-                val cardId = intent.getStringExtra("cardId")?.takeIf(String::isNotBlank)
-                    ?: error("missing cardId")
-                val manager = RearCardManager.create(context)
-                when (action) {
-                    ActionShowAssistant -> manager.setVisible(cardId, true)
-                    ActionHideAssistant -> manager.setVisible(cardId, false)
-                    else -> manager.deleteCard(cardId)
-                }
-            }
-        }.onSuccess { result ->
-            Log.i(AssistantLogTag, "action=$action success=${result.success} message=${result.message}")
-        }.onFailure { error ->
-            Log.e(AssistantLogTag, "action=$action failed", error)
-        }
-    }
-
-    /** Emulator/device proof that closing a real Linux pipe releases a blocked import read. */
-    private fun runBlockedImportSelfTest() {
-        val (reader, writer) = ParcelFileDescriptor.createPipe()
-        val startedAt = SystemClock.elapsedRealtime()
-        val error = try {
-            runCatching {
-                ParcelFileDescriptor.AutoCloseInputStream(reader).use { input ->
-                    BoundedDeadlineCopy.copyWithSupervisor(
-                        input = input,
-                        output = ByteArrayOutputStream(),
-                        maxBytes = 1024L,
-                        timeoutNanos = TimeUnit.MILLISECONDS.toNanos(250L),
-                        closeSource = reader::close,
-                    )
-                }
-            }.exceptionOrNull()
-        } finally {
-            runCatching { reader.close() }
-            runCatching { writer.close() }
-        }
-        val elapsedMs = SystemClock.elapsedRealtime() - startedAt
-        val passed = error is BoundedDeadlineCopy.DeadlineExceededException && elapsedMs < 2_000L
-        Log.i(
-            ImportSelfTestLogTag,
-            "passed=$passed elapsedMs=$elapsedMs error=${error?.javaClass?.simpleName.orEmpty()}",
-        )
-        check(passed) { "blocked import self-test failed after ${elapsedMs}ms: $error" }
-    }
-
-    private fun requiredWallpaperId(intent: Intent): Int =
-        intent.getIntExtra("wallpaperId", Int.MIN_VALUE).also { id ->
-            check(id != Int.MIN_VALUE) { "missing wallpaperId" }
-        }
 
     private companion object {
-        const val ActionApplyWallpaper = "org.orynnx.outerview.DEBUG_APPLY_WALLPAPER"
-        const val ActionImportWallpaper = "org.orynnx.outerview.DEBUG_IMPORT_WALLPAPER"
-        const val ActionRenameWallpaper = "org.orynnx.outerview.DEBUG_RENAME_WALLPAPER"
-        const val ActionShowAssistant = "org.orynnx.outerview.DEBUG_SHOW_ASSISTANT"
-        const val ActionHideAssistant = "org.orynnx.outerview.DEBUG_HIDE_ASSISTANT"
-        const val ActionDeleteAssistant = "org.orynnx.outerview.DEBUG_DELETE_ASSISTANT"
-        const val ActionTestBlockedImport = "org.orynnx.outerview.DEBUG_TEST_BLOCKED_IMPORT"
-        const val WallpaperLogTag = "OuterView-Wallpaper-Test"
-        const val AssistantLogTag = "OuterView-Assistant-Test"
-        const val ImportSelfTestLogTag = "OuterView-Import-Test"
-
-        val WallpaperActions = setOf(ActionApplyWallpaper, ActionImportWallpaper, ActionRenameWallpaper)
-        val SupportedActions = WallpaperActions + setOf(
-            ActionShowAssistant,
-            ActionHideAssistant,
-            ActionDeleteAssistant,
-            ActionTestBlockedImport,
-        )
+        const val PREFIX = "org.orynnx.outerview.DEBUG_AI_"
+        const val TAG = "OuterView-AI-Test"
+        val ACTIONS = setOf("SNAPSHOT", "IMPORT", "REMOVE", "RESTORE", "OPEN_SYSTEM")
     }
 }

@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Credex 账户速览 · 应用包预览</title>
+<style>
+*{box-sizing:border-box}body{margin:0;padding:32px;background:#e9efec;color:#233a34;font-family:system-ui,sans-serif}main{max-width:1090px;margin:auto}header{display:flex;justify-content:space-between;gap:20px;align-items:center;margin-bottom:22px}h1{margin:0 0 8px;font-size:26px}p{margin:0;line-height:1.8;color:#526f64;font-size:14px}nav{display:flex;gap:8px;flex-wrap:wrap;margin:18px 0}button,select{font:inherit;padding:9px 14px;background:#fff;border:1px solid #c5d5cc;border-radius:12px;color:#244c3c;cursor:pointer}button.active{background:#244c3c;color:white}.stage{padding:15px;background:#cfddd4;border-radius:30px;box-shadow:0 22px 60px #24433217}canvas{display:block;max-width:100%;height:auto;margin:auto;border-radius:22px;touch-action:none}footer{margin-top:20px}#notice{margin-bottom:16px;font-size:14px;color:#285548}@media(max-width:650px){body{padding:16px}header{display:block}.stage{padding:7px}}
+</style>
+<main><header><div><h1>Credex 账户速览</h1><p>跟随 Credex 当前来源 · 左侧镜头区域不参与交互</p></div><select id="size" aria-label="画布尺寸"><option value="904">904 × 572</option><option value="976">976 × 596</option></select></header>
+<nav aria-label="数据场景">
+<button data-state="live">真实 Credex</button><button data-state="fresh">演示 · Codex</button><button data-state="balance">演示 · 账户余额</button><button data-state="percent">演示 · 百分比额度</button><button data-state="long">演示 · 长详情</button><button data-state="low">演示 · 额度耗尽</button><button data-state="cached">演示 · 缓存</button><button data-state="auth">演示 · 登录失效</button><button data-state="empty">演示 · 无数据</button><button data-state="none">演示 · 未选择</button>
+</nav><p id="notice">正在读取本机 Credex…</p>
+<div class="stage"><canvas id="c" width="904" height="572" aria-label="Credex 账户卡片。Codex 点击切换已用与剩余；其他服务点击查看详情；长按隐藏，左右滑动翻页。"></canvas></div>
+<footer><p>Codex 轻触切换已用 / 剩余；其他服务轻触查看详情，长详情可继续轻触翻段。长按 650 毫秒隐藏，左右滑动翻页。</p><p>“真实 Credex”只读本机展示 Provider；“演示”数据仅用于检查布局，不会写入手机或打进运行包。其他服务数值保留 Credex 显示含义。</p></footer></main>
+<script>
+const large=new URLSearchParams(location.search).get('size')==='976';
+window.CANVAS_W=large?976:904;window.CANVAS_H=large?596:572;
+c.width=CANVAS_W;c.height=CANVAS_H;size.value=large?'976':'904';
+size.onchange=()=>location.search='?size='+size.value;
+const bus=new EventTarget();window.data={cq:{},addEventListener:bus.addEventListener.bind(bus)};
+const seed={rows:1,kind:'codex',health:'fresh',five:68,week:42,fiveReset:'10-03 17:00',weekReset:'10-07 20:00',plan:'plus',status:'OK',updated:'12:30',source:'OpenAI Codex'};
+const balance={rows:1,kind:'balance',sourceId:'balance-demo',source:'账户余额',health:'fresh',balanceCount:1,
+ b1Name:'账户余额',b1Value:'$128.50',b1Status:'已更新',b1Detail:'账户可用余额 · 包含赠送额度',b1Updated:'13:30',status:'已更新',updated:'13:30'};
+const percent={...balance,sourceId:'percent-demo',source:'OpenCode Go 配额',b1Name:'OpenCode Go 配额',b1Value:'36.8%',
+ b1Detail:'已用比例 · 按 Credex 设置显示\n5 小时窗口 36.8% · 每周窗口 21.4%'};
+const cases={fresh:seed,balance,percent,long:{...percent,b1Detail:'已用比例 · 按 Credex 设置显示\n'+
+ '5 小时窗口已用 36.8%\n每周窗口已用 21.4%\n额度由当前服务提供，刷新和重置时间以 Credex 为准。\n'+
+ '这是一段用于检查自动换行和完整翻页的演示说明。\n余额、百分比、令牌计划的含义跟随来源，不进行额外换算。\n'+
+ '服务未提供精确重置时间时不生成倒计时。\n详情超过屏幕高度可以点击继续翻段。'},
+ low:{...seed,five:0,week:7},cached:{...balance,health:'cached',status:'刷新失败 · 最近缓存',b1Status:'刷新失败 · 最近缓存'},
+ auth:{...balance,health:'auth_required',status:'访问凭据已失效',b1Status:'访问凭据已失效',b1Value:'--',b1Detail:''},
+ empty:{rows:0},none:{rows:1,kind:'none',source:'',balanceCount:0}};
+let selected='live';
+function patch(value){data.cq=value;bus.dispatchEvent(new Event('change'));}
+async function choose(state){
+ selected=state;document.querySelectorAll('[data-state]').forEach(b=>b.classList.toggle('active',b.dataset.state===state));
+ if(state!=='live'){patch(cases[state]);notice.textContent='演示数据 · '+state+' · 不写入设备';return;}
+ try{const r=await fetch('/api/credex',{cache:'no-store'});if(!r.ok)throw Error('读取失败');const payload=await r.json();if(selected!=='live')return;patch(payload);notice.textContent='真实 Credex · '+(payload.source||'未选择服务')+' · '+(payload.status||'等待数据');}
+ catch(e){if(selected!=='live')return;patch({rows:0});notice.textContent='真实读取失败：'+e.message;}
+}
+document.querySelectorAll('[data-state]').forEach(b=>b.onclick=()=>choose(b.dataset.state));
+window.CredexPreviewRefresh=()=>choose(selected);window.CredexPreviewSelect=choose;
+</script><script src="quota.js"></script><script>choose('live');</script></html>

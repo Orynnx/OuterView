@@ -1,86 +1,95 @@
-# 卡片适配指南
+# 智能应用包开发
 
-## 最小 ZIP 结构
+当前 `3.0.0` 导入器面向 **MAML Widget 内的 JsCanvas/Script**。它不再提供旧版 Smart Assistant payload、模板替换或壁纸管理接口。
+
+## 两种输入格式
+
+原始 MAML ZIP（扩展名可以是 `.zip` 或 `.mrc`）：
 
 ```text
-my-card.zip
+my-app.zip
 ├── manifest.xml
-├── outerview-card.json     可选
 └── assets/
-    └── image.png
+    └── index.html     可选；是否使用由资源与宿主决定
 ```
 
-`manifest.xml` 必须位于 ZIP 顶层，根节点必须是 `<Widget>`，并声明 `version="2"`：
+一层主题外包：
+
+```text
+my-app.zip
+├── rearscreen        内层 ZIP，或改名为 rearScreen.mrc，二者只能有一个
+├── description.xml   可选
+├── app/
+│   └── app_icon.png  可选
+└── preview/
+    └── preview.png   可选；也支持 JPEG/WebP 预览
+```
+
+不要再套一层目录。原始包的 `manifest.xml` 必须位于根目录；外包根目录不能同时有 `manifest.xml` 与内层资源。只支持上述一层外包，不接受额外的 ZIP/MRC 资产嵌套。
+
+未提供外层元数据时名称默认为“智能应用”，用户可在确认时修改。未提供图标或预览时由宿主创建默认图片。输入中的资源 ID、绝对路径或自定义 registry 不参与部署；最终 ID 由 OuterView 生成。
+
+## 最小入口
 
 ```xml
 <?xml version="1.0" encoding="utf-8"?>
-<Widget version="2"
-        frameRate="30"
-        screenWidth="1080"
-        scaleByDensity="false">
-    <Rectangle w="#view_width" h="#view_height" fillColor="#FF101418"/>
+<Widget version="2" screenWidth="904" frameRate="30" clearCanvas="true">
+    <JsCanvas name="my_counter" x="0" y="0" w="#view_width" h="#view_height">
+        <Script><![CDATA[
+            // 在这里放置面向宿主兼容层编写的 JavaScript。
+            const canvas = document.getElementById('c');
+            const ctx = canvas.getContext('2d');
+            ctx.fillStyle = '#101820';
+            ctx.fillRect(0, 0, window.CANVAS_W || 904, window.CANVAS_H || 572);
+        ]]></Script>
+    </JsCanvas>
 </Widget>
 ```
 
-不要在 ZIP 外再套一层目录。文件名区分大小写。
+Parser 要求根为 `Widget`，有 1 至 8 个 JsCanvas，并且每个都有非空内嵌 Script。示例采用 version=2；仅通过这一结构检查不能证明任意脚本语法或 API 在宿主中可用。
 
-## 元数据
+`JsCanvas` 是 MAML 元素，不能仅凭 `document`、`window` 或同包 HTML 就把它等同于 WebView。桌面浏览器可预览 Canvas 逻辑，但运行引擎、API 兼容层及权限需按实际宿主验证。
 
-可选的 `outerview-card.json` 只影响导入展示和默认 payload，不能覆盖最终 business 或宿主路径。导入器仍可读取旧文件名用于兼容 2.x 卡片：
+## 名称与外层元数据
 
-```json
-{
-  "schemaVersion": 1,
-  "name": "My Card",
-  "author": "Your Name",
-  "version": "1.0.0",
-  "defaultMamlConfig": {}
-}
+支持以下两种描述根节点，优先读取 `appName`，其次 `title`：
+
+```xml
+<theme>
+    <resourceType>rearscreen</resourceType>
+    <appName>轻触计数器</appName>
+</theme>
 ```
 
-OuterView 首次导入时生成随机 128 位 `cardId`，并固定使用 `outerview_custom_<cardId>` 作为 business。替换模板不会改变身份。
+```xml
+<MIUI-Theme>
+    <title>轻触计数器</title>
+    <author>Local learning example</author>
+</MIUI-Theme>
+```
 
-## 尺寸与交互
+描述只提供展示信息，不是取得系统权限或指定安装目录的途径。名称应为 1 至 80 个字符，不含控制字符。
 
-- 使用 `#view_width`、`#view_height` 适配宿主实际区域。
-- 固定设计稿可以通过统一 `scale` 和居中 offset 映射；Hello Card 使用 480 x 304 逻辑画布。
-- 触摸区域应使用宿主支持的根层 `touchable` Group/Rectangle，并在真机验证摄像头遮挡区。
-- 动画应有稳定尺寸，不要依赖内容变化改变根布局。
-- 避免高帧率常驻动画；静止状态暂停 Animation，减少背屏功耗。
+## 尺寸、触摸与存储
 
-## Payload
+- 根据 `#view_width/#view_height` 和宿主提供的 Canvas 尺寸计算缩放；预留镜头遮挡区。904×572、976×596 是示例坐标，不是所有设备的固定规格。
+- 绘制与触摸应使用同一变换：把事件坐标逆映射到逻辑画布后判断命中；区分轻触、滑动和取消。
+- 对缺失的时间或其他宿主数据提供默认值。验证数据是在启动时注入还是持续更新，避免与本地计时重复累计。
+- `localStorage`、刷新节奏、休眠/AOD节流和重启恢复必须在宿主中单独测试；浏览器行为不能作为这些能力的证明。
+- 静止内容不应依赖常驻高帧率动画；处理页面退出与再次进入。
 
-普通模式下用户编辑 `maml_config`，OuterView 自动包装 rear payload 并强制覆盖 business。需要完整兼容系统业务时可使用高级 rear/focus JSON，但 business 仍由 OuterView 管理。
+## 校验范围
 
-卡片应为缺失字段准备默认值，不要假定 payload 一定包含网络数据、定位或账户信息。
+当前限制：输入不超过 16 MiB；内外层累计解压不超过 32 MiB、512 项；XML 不超过 2 MiB；选用图标/预览不超过 8 MiB。大于 1 MiB 的条目还检查 200:1 压缩比上限。
 
-## 安全要求
+路径穿越、绝对路径、重复/大小写冲突、文件目录冲突、CRC不一致、DOCTYPE及实体声明会被拒绝。所有 XML 检查格式与实体声明。原生 MAML Binder、Intent、MethodCommand 和其他命令正常传递给系统宿主，不按能力名称拒绝；具体运行能力由宿主实现与 Android 权限决定。JavaScript 明确允许，并显示执行脚本提示；包校验不是代码沙箱。
 
-导入器限制：
+## 学习与验证
 
-- 压缩包最大 16 MB。
-- 解压估算最大 64 MB。
-- 最多 1024 个条目。
-- 拒绝绝对路径、`..`、DOCTYPE 和非 Widget v2 模板。
-- 扫描包内全部 `.xml`（路径大小写不敏感），发现 `IntentCommand`、`ExternCommand`、
-  `MethodCommand`、外部数据 Binder 或蓝牙/网络/铃声/Wi-Fi 系统控制命令后要求用户确认。
-
-除非功能确实需要，不要使用外部命令、广播或启动 Activity。不得把密钥、账号、设备标识或私有接口凭据写进卡片。
-
-## 打包与测试
-
-Hello Card 提供仅使用 Python 标准库的确定性打包脚本：
+原创 [轻触计数器](../demo/tap-counter/README.md) 从同一 `counter.js` 生成 JsCanvas 和浏览器版本：
 
 ```bash
-python demo/hello-card/build_card.py
+python3 demo/tap-counter/build_example.py
 ```
 
-开发卡片建议按以下顺序测试：
-
-1. 在桌面工具或主题环境中确认 XML 基本语法。
-2. 用 OuterView 导入，确认预检统计与风险扫描。
-3. 显示后检查诊断中的 `templateReadable=true`、`managerListContains=true`、`loadSucceeded=true`。
-4. 反复执行显示、隐藏和宿主重启。
-5. 删除后确认 manager list 与模板路径均不存在。
-
-完整实例见 [Hello Card](../demo/hello-card/README.md)。
+建议依次检查包结构、桌面逻辑、宿主导入、背屏实际显示/触摸、退出再进入、宿主重启，以及从 OuterView 和系统管理页分别移除后的持久化一致性。每项记录独立结果；导入返回成功不等同于每个交互均已验证。

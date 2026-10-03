@@ -48,8 +48,8 @@ afterEvaluate {
         publications {
             register<MavenPublication>("release") {
                 groupId = "org.orynnx.outerview"
-                artifactId = "fun-card-core"
-                version = "2.4.0"
+                artifactId = "ai-app-core"
+                version = "3.0.0"
                 from(components["release"])
             }
         }

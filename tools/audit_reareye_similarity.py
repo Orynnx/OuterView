@@ -18,7 +18,7 @@ SOURCE_SUFFIXES = {
     ".kt", ".kts", ".properties", ".ps1", ".py", ".sh", ".toml", ".xml", ".yml", ".yaml",
 }
 FUNCTION_SUFFIXES = {".java", ".kt", ".kts"}
-SKIP_PARTS = {".git", ".gradle", "build", "generated"}
+SKIP_PARTS = {".git", ".gradle", ".kotlin", "build", "generated"}
 WRAPPER_ALLOWLIST = {
     "gradlew",
     "gradlew.bat",

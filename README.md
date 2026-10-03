@@ -4,86 +4,64 @@
 
 # OuterView
 
-OuterView 是面向小米 17 Pro / 17 Pro Max 背屏的自定义 Smart Assistant 卡片与壁纸管理器，
-同时提供独立 LSPosed 模块和 Compose 管理界面。
+OuterView 是小米背屏智能应用管理器，通过主题壁纸原生流程导入、恢复和移除本地 JsCanvas 应用包，并与系统 AI 应用管理同步。
 
-当前版本：`2.4.1`；Assistant Host API：`v5`；Wallpaper Host API：`v3`。
+当前版本 **3.0.0**。需要 Root、LSPosed，以及带有原生背屏智能应用功能的主题壁纸版本。当前没有 Shizuku 后端；不同 HyperOS 版本的兼容性需要单独验证。
 
-## 2.4.0 的许可证迁移与独立性
+[下载 APK](https://github.com/Orynnx/OuterView/releases/download/v3.0.0/OuterView-3.0.0.apk) · [下载 Credex 背屏应用](https://github.com/Orynnx/OuterView/releases/download/v3.0.0/Credex-account-1.1.0.zip) · [English](README_EN.md)
 
-- 不链接 DexKit、MMKV 或任何 GPL/LGPL/AGPL 运行时依赖。
-- 使用项目自有的 DEX 查询器和 BSD-3-Clause 的 Google `smali-dexlib2` 定位 HyperOS 宿主入口。
-- `core` 命名空间为 `org.orynnx.outerview.core`，新卡片使用 `outerview_custom_` 标识。
-- 旧 `reareye_custom_` 标识只用于迁移本应用先前创建的数据，不会扫描或接管其他模块资源。
-- 仓库附带的 Hello Card 只含项目原创 XML、元数据和打包脚本，不含外部图片、音频或字体。
+## 使用
 
-2.4.0 延续许可证迁移版本：当前工作树和此后分发的源码、APK 均以
-[GNU GPL v3.0](LICENSE) 发布。此前已经以其他许可证取得的副本仍按其原授予条款处理；
-迁移边界与可重复来源审计方法见 [许可证转换说明](docs/LICENSE_TRANSITION.md)。
+1. 安装 APK，在 LSPosed 中启用 OuterView，作用域选择 **主题壁纸 `com.android.thememanager`**。
+2. 重新启动主题壁纸应用，从系统设置的背屏页面，在“应用卡”分组的“AI 生成应用卡”下方点击 **OuterView 智能应用**。系统页面先启动主题宿主，随后打开独立管理 Activity；桌面图标仅显示关于、版本和更新。
+3. 选择可信的 ZIP/MRC，查看预检提示、填写名称并确认导入。
+4. 对“未在背屏登记”的应用，可确认“恢复显示”以保留原 ID 和资源恢复登记；也可确认移除，或打开“系统智能应用”继续管理。原生应用与本地导入应用均通过系统管理流程处理。
 
-## 功能
+“已在背屏登记”表示持久化登记存在，不等于当前正在背屏上渲染。操作结果未确认或导入失败时，请先刷新列表或到系统智能应用中核对结果，暂勿重复导入；恢复、移除失败后，可从提示框刷新列表，再重新选择应用。
 
-- 从系统文件选择器导入并校验 Smart Assistant `Widget version="2"` ZIP。
-- 防护 ZIP Slip、DOCTYPE、异常条目数/体积，并提示危险 MAML 命令。
-- 经宿主 Smart Assistant 原生运行管线安装、显示、隐藏和删除自定义卡片。
-- 导入、选择、重命名和删除 OuterView 自有背屏壁纸。
-- 通过无 Compose 的 `core` Android Library 提供卡片管理端点。
+可从原创 [轻触计数器](demo/tap-counter/README.md) 或 [Credex 账户速览](demo/credex-account/README.md) 开始学习。支持 `ContentProviderBinder`、数据绑定和原生命令，不对 MAML 能力做黑名单过滤。
 
-## 使用条件
+## Credex 背屏应用
 
-- 小米 17 Pro / 17 Pro Max，Android 16 / HyperOS 4 背屏服务。
-- Magisk 或 KernelSU，以及可用的 LSPosed 实现。
-- LSPosed 作用域包含 `com.xiaomi.subscreencenter`。
+在 Credex「设置 → 背屏配置」选择 Assistant 展示源，导入本次 Release 的 `Credex-account-1.1.0.zip`。
 
-## 安装使用
+- Codex 显示 5 小时与每周额度，支持已用／剩余切换及窗口详情。
+- 其他服务显示自己的余额或额度、状态和完整分页详情，保留 Credex 的数值含义。
+- 左右滑动翻页、长按隐藏数值与详情、点击读取最新展示数据。
 
-1. 安装 APK，在 LSPosed 中启用 OuterView 并勾选“小米背屏中心”。
-2. 强制停止背屏中心或重启设备。
-3. 打开 OuterView，确认 Assistant 与 Wallpaper Host 已连接。
-4. 点击 `+` 导入卡片 ZIP；安装完成后手动开启显示。
-5. 通过更多菜单替换模板、编辑 payload、查看诊断或永久删除。
+卡片读取和交互本身无需 Root；通过当前 OuterView 导入系统宿主仍需 LSPosed。卡片不自动更新，新版需要重新导入。
 
-首次测试可导入 [Hello Card](demo/hello-card/hello-card.zip)。
+![Credex 账户速览演示数据](demo/credex-account/preview.png)
 
-## 构建与验证
+## 应用更新
 
-要求 JDK 17、Android SDK 37：
+About 页面读取本仓库最新正式 GitHub Release，支持检查、下载并打开系统安装器。本地 `-dev` 版本可以识别同版本号的正式版；发布附件使用 `OuterView-X.Y.Z.apk`，升级保持相同签名。
 
-```powershell
-$env:JAVA_HOME = "C:\Program Files\Android\Android Studio\jbr"
-.\gradlew.bat :core:testDebugUnitTest :app:assembleDebug
-py -3 demo/hello-card/build_card.py --check
+此前的 `3.0.0-dev` APK 尚未包含此修复，需要手动安装本次 3.0.0，之后恢复正常检查。旧版 2.x 管理范围与 3.0 不同，升级前请阅读下方说明。
+
+3.0 已移除旧版助手卡片、壁纸管理及其 Host API。**已有旧卡片与壁纸不会被自动删除或迁移**；旧版安装包和历史文档不能视为当前使用说明。
+
+## 构建
+
+使用 JDK 17 和 Android SDK 37：
+
+```bash
+./gradlew :core:testDebugUnitTest :app:testDebugUnitTest :app:assembleDebug
+python3 demo/tap-counter/build_example.py
+node --test demo/credex-account/test.js
 ```
 
-Debug APK 位于 `app/build/outputs/apk/debug/app-debug.apk`。许可证审计命令见
-[许可证转换说明](docs/LICENSE_TRANSITION.md)，第三方通知见
-[`LICENSES/NOTICE.md`](LICENSES/NOTICE.md)。这些通知也会嵌入 APK 的 `assets/`。
+Windows 使用 `.\gradlew.bat` 和 `py -3`。Debug APK 位于 `app/build/outputs/apk/debug/app-debug.apk`。`assembleRelease` 生成经过 R8 和资源压缩的未签名 APK，需要用既有签名密钥签名后发布。
 
-## 仓库结构
+管理入口已在 Xiaomi 17 Pro 获用户确认；Credex 卡片完成逻辑、浏览器和包解析验证，原生运行待实测。构建和单元测试不能代替对应系统版本的设备验证。
 
-```text
-app/                 Compose 管理器、独立 DEX 查询器与 LSPosed Hook
-core/                无 UI 的卡片/壁纸 Host API
-demo/hello-card/     最小 MAML 卡片
-LICENSES/            运行时依赖许可证和通知
-tools/               相似代码与依赖审计工具
-docs/                架构、二次开发和迁移说明
-```
+## 文档
 
-## 安全边界
+- [应用包与示例开发](docs/CARD_DEVELOPMENT.md)
+- [Core API 与构建](docs/DEVELOPMENT.md)
+- [原生接入架构](docs/ARCHITECTURE.md)
+- [安全边界](SECURITY.md) · [变更记录](CHANGELOG.md)
 
-OuterView 新资源固定使用 `outerview_custom_` / `outerview_wallpaper_` 前缀及专属 registry。
-系统模板、系统持久化文件和其他模块资源不属于管理范围。旧前缀只在本应用签名权限保护的
-Host API 和本应用 registry 记录共同成立时兼容。卡片导入会扫描包内全部 XML 并提示可执行、
-反射、外部数据和系统控制能力；壁纸导入会直接拒绝这些能力。扫描不能代替来源信任，请只安装
-可信来源的包。详见 [SECURITY.md](SECURITY.md)。
+源码按 [GNU GPL v3.0](LICENSE) 分发；历史许可证转换说明见 [LICENSE_TRANSITION.md](docs/LICENSE_TRANSITION.md)，第三方通知见 [LICENSES/NOTICE.md](LICENSES/NOTICE.md)。
 
-## AI 创作声明
-
-此项目部分编码和测试由 GPT-5.6-Sol 完成。软件按 GPL-3.0 的条款提供，不对安全性、
-可用性或文档正确性作额外保证。
-
-## 声明
-
-小米、HyperOS、Smart Assistant 与 MAML 的相关权利归各自权利人所有。OuterView 是独立
-社区项目，与小米公司及其他背屏模块项目均无隶属或背书关系。
+OuterView 是独立社区项目，与小米公司无隶属或背书关系。小米、HyperOS、MAML 等相关权利归各自权利人所有。

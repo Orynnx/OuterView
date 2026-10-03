@@ -16,6 +16,6 @@ class FunCardHookEntry : IYukiHookXposedInit {
     }
 
     override fun onHook() {
-        encase(CustomRearCardHook(), RearWallpaperHostHook())
+        encase(AiAppHostHook())
     }
 }

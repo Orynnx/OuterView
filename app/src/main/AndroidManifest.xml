@@ -32,6 +32,11 @@
             </intent-filter>
         </activity>
 
+        <activity
+            android:name=".AiAppManagerActivity"
+            android:label="智能应用"
+            android:exported="true" />
+
         <provider
             android:name="androidx.core.content.FileProvider"
             android:authorities="${applicationId}.files"
@@ -46,5 +51,6 @@
 
     <queries>
         <package android:name="com.xiaomi.subscreencenter" />
+        <package android:name="com.android.thememanager" />
     </queries>
 </manifest>

@@ -1,3 +1,3 @@
 -keep public class org.orynnx.outerview.core.** { public protected *; }
--keep class org.orynnx.outerview.core.hostapi.IFunCardHostService** { *; }
--keep class org.orynnx.outerview.core.hostapi.IFunCardHostConnection** { *; }
+-keep class org.orynnx.outerview.core.ai.IAiAppHostService** { *; }
+-keep class org.orynnx.outerview.core.ai.IAiAppHostConnection** { *; }

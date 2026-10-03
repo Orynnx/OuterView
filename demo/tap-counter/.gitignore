@@ -1,0 +1,8 @@
+__pycache__/
+assets/
+manifest.xml
+description.xml
+preview.html
+rearscreen
+*.zip
+build-report.json

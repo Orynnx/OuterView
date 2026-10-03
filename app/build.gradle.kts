@@ -15,8 +15,8 @@ android {
         applicationId = "org.orynnx.outerview"
         minSdk = 36
         targetSdk = 36
-        versionCode = 11
-        versionName = "2.4.1"
+        versionCode = 13
+        versionName = "3.0.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
@@ -69,7 +69,6 @@ dependencies {
     implementation(libs.yukihookapi)
     implementation(libs.kavaref.core)
     implementation(libs.kavaref.extension)
-    implementation(libs.smali.dexlib2)
 
     implementation(platform(libs.compose.bom))
     implementation(libs.androidx.activity.compose)

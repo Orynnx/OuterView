@@ -1,24 +1,69 @@
-# 架构
+# 智能应用接入架构
+
+本文对应 `3.0.0` 正式版本。当前只保留智能应用管理：`core.ai`、必要的安全辅助代码，以及主题壁纸进程中的 Hook。旧助手和壁纸 Host API 已移除。
 
 ```text
-Compose UI
-  -> RearCardManagementEndpoints
-  -> App 私有 ZIP / registry
-  -> 签名权限 Binder
-  -> com.xiaomi.subscreencenter 中的 OuterView Hook
-  -> 宿主模板目录与私有 registry
-  -> Smart Assistant 原生 Post/Remove 管线
-  -> manager list -> MAML loader -> 背屏
+Compose 管理页
+  -> core.ai.AiAppManager
+  -> 私有缓存预检 / 一次性 token
+  -> 签名权限广播 + AIDL Binder + ParcelFileDescriptor
+  -> com.android.thememanager 中的 AiAppHostHook
+  -> ThemeAiBridge 再次校验
+  -> 原生 RearScreenAiAppResourceApplyManager
+  -> 原生资源文件 + Room + runtimeAiApp.json + insertAppWidget
+  -> 系统智能应用列表 / 背屏运行时
 ```
 
-## 为什么不使用通知
+## 连接与协议
 
-早期版本通过真实静默通知触发 `handleNotificationPosted`。这条链路容易被用户划除通知、通知权限和系统清理策略打断。Assistant Host API v5 在宿主进程中构造等价 extras，并直接调用已解析的原生 Post Runnable；隐藏则调用宿主按 package/business 移除方法。
+桌面入口 `MainActivity` 仅提供关于、版本和更新。管理页由独立的 `AiAppManagerActivity` 承载；背屏设置的原生“应用卡”分组在 AI 项之后插入 OuterView 控制器，复用系统 Adapter 的行高、分组圆角和点击反馈。只对这一控制器实例替换标题和跳转，原有系统项保持其原生行为。先进入系统页面会启动主题宿主，管理页仍需通过完整接口就绪检查。
 
-## 一致性
+`AiAppHostContract` 定义 API v1。客户端向主题包发送 `REQUEST_AI_APP_HOST_SERVICE`，在 `hostApiBundle` 中携带 `callback` Binder。接收器要求调用者具有 OuterView 的签名权限；每次服务调用还核对调用 UID 对应的包名。客户端只接受主题 UID 的回调，并检查 `apiVersion`、`providerPackage` 和 `ready`。
 
-显示和隐藏最多等待 5 秒，以 manager list 和 live widget 证据作为成功条件。删除先确认 runtime 消失，再删除宿主模板。宿主离线时，本地删除会留下 cleanup tombstone，后续连接时补做清理。
+宿主 AIDL 提供能力查询、列表、导入、恢复登记、移除和打开系统管理页。系统管理 Activity 具有内部权限，因此由主题进程自身启动，普通应用不直接绕过该权限。
 
-## 文件边界
+宿主反射使用方法参数、返回值及泛型签名识别原生入口；证据缺失或存在歧义时报告不兼容，不猜测可能改变状态的方法。
 
-宿主模板位于当前用户的 `subscreencenter/smart_assistant/outerview_custom_<cardId>`，是无扩展名 ZIP。Hook 只删除规范化后位于该目录且名称符合专属前缀的文件。2.4.0 仅在本应用旧 registry 已记录相同 `cardId` 时兼容旧前缀；系统模板、其他模块模板与 `notification_widget.json` 永远只读。
+## 导入与一致性
+
+1. `inspect(uri)` 以受限流复制到应用私有缓存，使用共享 parser 检查结构，并产生 30 分钟有效的一次性 token。
+2. 用户确认后再次检查缓存指纹，把原始输入文件以只读 PFD 交给宿主。UI 提交的名称不能指定资源 ID 或目标路径。
+3. 宿主限时、限量复制 PFD 并重新解析。生成 `outerview_ai_<UUID>`，准备 MAML ZIP、图标、预览及来源标记。
+4. 写入前，模块要求背屏持久化登记与服务内存登记的全部字段和顺序一致。原生管理器完成资源复制、Room/JSON 登记和背屏服务插入，并负责自身事务中的原生回滚。
+5. 写入后，模块读回实际 widget、Room 记录、JSON 镜像及资源文件，并验证持久化登记与内存登记一致、除本次新增 ID 外的既有条目全部字段和顺序保持不变，避免把单个返回值当作完整成功。
+6. 原生失败、异常或读回未确认时，保留现场并返回失败或未确认信息。模块不额外删除原生资源或管理记录，也不追加补偿回滚；本次创建的临时缓存仍会清理。应先刷新或到系统管理核对，不能把未确认结果当作已回滚。
+
+应用侧操作串行，宿主也仅允许一个操作执行。输入复制受时间和体积限制；进入原生文件/数据库事务之后，不在客户端超时点强行取消。收到 `pending=true` 的“仍在执行”结果应刷新查询，不能立即自动重试导入。
+
+## 为什么使用原生目录
+
+当前实现仅支持主用户 0，第二空间会在兼容性检查时拒绝。典型路径为：
+
+```text
+/data/system/theme_magic/users/0/rearScreenAiApp_Theme/
+├── outerview_ai_<UUID>/
+│   ├── rearScreen.mrc
+│   ├── app_icon.png
+│   └── preview.png
+└── runtimeAiApp.json
+```
+
+代码从主题资源提供者获取实际目录，不由导入包指定路径。使用原生目录使原生 Room、JSON 索引、Binder 列表和系统移除流程一致；单独把文件放进 `outerview` 目录并不能完成这些登记。
+
+**这不是“独立目录无法渲染”的结论。** 独立路径的渲染能力尚不足以据此判断；当前选择解决的是完整原生管理与删除的一致性。
+
+## 列表与删除
+
+列表合并 AI Room 管理记录与背屏登记，名称和路径优先读取 Room。`registered` 以背屏持久化登记为准；UI 显示“已在背屏登记”或“未在背屏登记”。背屏服务的内存 widget 可能尚未加载，不能把临时内存缺项解释成持久化登记丢失，也不能用登记状态证明当前屏幕已经渲染。`managed` 需要资源 ID、来源标记和实际路径一致，仅用于展示来源。刷新列表不会自动清理记录或文件。
+
+未登记应用的“恢复显示”需用户确认后调用 `restoreCard(id)`。宿主检查原记录与资源，使用同一 ID 恢复登记，并验证既有条目的全部字段与顺序保持不变；已有登记则幂等返回。恢复不重新导入资源、不生成新的应用 ID，也不自动处理其他条目。
+
+用户确认后，已登记的原生 AI 卡与 OuterView 导入卡都调用主题的完整移除流程，再读回 widget、数据库、JSON 和资源清理状态，并验证其余登记条目的全部字段与顺序保持不变。只删某个文件、只调用 `deleteAppWidget` 或只改本地列表都不能替代此流程。
+
+对于仅有管理记录的条目，移除前再次确认持久化登记与服务内存一致、该 ID 没有登记，且管理记录未变化，再通过 AI repository 删除单条记录并检查 Room/JSON 同步。此分支保留原资源文件，不执行目录清理，并验证全部背屏登记的字段和顺序不变；只由用户明确移除触发。
+
+没有自动迁移、删除或恢复旧版助手卡片与壁纸。历史资源保留在原来的位置；它们不属于新管理列表的自动接管范围。
+
+## 验证边界
+
+包解析与单元测试检查输入和本地状态逻辑；原生类解析、动态加载、背屏显示、触控、保存及系统侧删除需要设备验证。本文描述实现，不声明这些项目已经在所有目标系统或本次设备上通过。

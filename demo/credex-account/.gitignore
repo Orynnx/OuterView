@@ -1,0 +1,7 @@
+__pycache__/
+manifest.xml
+description.xml
+app_icon.png
+*.mrc
+*.zip
+build-report.json

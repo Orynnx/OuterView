@@ -1,5 +1,7 @@
 # 背屏壁纸加载研究
 
+> 历史研究记录，**不适用于当前 3.0 智能应用管理器**。下文“当前版本”以及 Wallpaper Host API 等表述属于旧助手/壁纸实现；对应管理接口已移除，不应按本文配置作用域或实施修改。当前作用域为主题壁纸 `com.android.thememanager`，使用说明见 [README](../README.md)，实现见 [原生接入架构](ARCHITECTURE.md)。原文保留用于追溯研究结论。
+
 ## 结论
 
 背屏 Wallpaper 与 Smart Assistant 卡片是两套运行时。卡片使用

@@ -1,6 +1,21 @@
 # Changelog
 
-## Unreleased
+## 3.0.0 — 2026-10-03
+
+- 管理对象改为背屏智能应用，移除旧助手卡片、壁纸管理与对应 Host API。现有旧资源不自动删除或迁移。
+- 新增 `core.ai` 管理 API、签名权限保护的 AI Host API v1，Hook 作用域改为主题壁纸 `com.android.thememanager`。
+- 通过主题原生管理器接入资源、Room、JSON 索引与背屏服务；新应用使用原生 `rearScreenAiApp_Theme/outerview_ai_<UUID>` 路径。
+- 用户确认后可走原生完整流程移除本地导入或原生 AI 应用，并由主题宿主打开受内部权限保护的系统管理页。
+- 列表区分背屏注册与仅有系统管理记录的状态；未注册条目须用户确认后清理管理记录，资源路径不能安全确认时保留文件。
+- 支持原始 JsCanvas ZIP/MRC 与一层主题外包，兼容 `theme` / `MIUI-Theme` 描述；客户端与宿主重复检查路径、XML、大小、CRC、嵌套和压缩比。
+- 导入采用限时输入复制、文件指纹和有期限的一次性预览 token；加入包边界与会话单元测试。
+- 设置页入口置于“应用卡”分组的 AI 项下方，使用系统原生行样式；Launcher 仅保留关于和更新。
+- 移除 MAML 能力黑名单，支持 `ContentProviderBinder`、原生命令和数据绑定。
+- 修复 `-dev` 本地版本无法检查更新的问题，匹配版本号的正式版本优先于开发版本；正式 APK 版本为 3.0.0（versionCode 13）。
+- 附带 Credex 账户速览 1.1.0 背屏应用：跟随 Credex Assistant 来源，展示 Codex 双窗口或其他服务的余额、额度、状态和分页详情，支持长按隐藏。
+- 加入原创轻触计数器及 Python 打包脚本，更新新 API 文档。入口已获 Xiaomi 17 Pro 用户确认；Credex 卡片完成逻辑与浏览器验证，原生运行待用户实测。
+
+## 2.4.1 开发记录（旧管理路线）
 
 - 2.4.1：放宽 Smart Assistant 卡片兼容性判据；不再强制 `Widget version="2"`，
   可选元数据或附属 XML 异常不再误拦正常卡片，同时保留 ZIP 路径、解压大小和 XML

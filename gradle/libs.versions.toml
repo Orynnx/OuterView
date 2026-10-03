@@ -5,7 +5,6 @@ ksp = "2.3.6"
 xposed = "82"
 yukihookapi = "1.3.1"
 kavaref = "1.0.2"
-smali = "3.0.9"
 compose-bom = "2026.05.00"
 activity-compose = "1.13.0"
 core-ktx = "1.18.0"
@@ -34,7 +33,6 @@ androidx-activity-compose = { group = "androidx.activity", name = "activity-comp
 miuix-ui = { group = "top.yukonga.miuix.kmp", name = "miuix-ui", version.ref = "miuix" }
 miuix-icons = { group = "top.yukonga.miuix.kmp", name = "miuix-icons", version.ref = "miuix" }
 miuix-preference-android = { group = "top.yukonga.miuix.kmp", name = "miuix-preference-android", version.ref = "miuix" }
-smali-dexlib2 = { group = "com.android.tools.smali", name = "smali-dexlib2", version.ref = "smali" }
 kavaref-extension = { group = "com.highcapable.kavaref", name = "kavaref-extension", version.ref = "kavaref" }
 yukihookapi-ksp-xposed = { group = "com.highcapable.yukihookapi", name = "ksp-xposed", version.ref = "yukihookapi" }
 rovo89-xposed-api = { group = "de.robv.android.xposed", name = "api", version.ref = "xposed" }

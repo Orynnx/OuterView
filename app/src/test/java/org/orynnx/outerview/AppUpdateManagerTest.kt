@@ -15,6 +15,21 @@ class AppUpdateManagerTest {
         assertEquals(-1, AppUpdateManager.compareVersions("2.3.0", "2.3.1"))
     }
 
+    @Test fun installedDevelopmentBuildCanUpgradeToTheMatchingStableRelease() {
+        assertEquals("3.0.0", AppUpdateManager.normalizeInstalledVersion("3.0.0-dev"))
+        assertTrue(AppUpdateManager.compareVersions("3.0.0", "3.0.0-dev") > 0)
+        assertTrue(AppUpdateManager.compareVersions("3.0.0-dev", "3.0.0") < 0)
+        assertEquals(0, AppUpdateManager.compareVersions("3.0.0-dev", "v3.0.0-dev"))
+        assertTrue(AppUpdateManager.compareVersions("3.0.1", "3.0.0-dev") > 0)
+        assertTrue(AppUpdateManager.compareVersions("2.4.1", "3.0.0-dev") < 0)
+    }
+
+    @Test fun developmentSuffixIsLocalOnlyAndMalformedVersionsStayInvalid() {
+        assertNull(AppUpdateManager.normalizeStableVersion("3.0.0-dev"))
+        listOf("3.0.0-dev/extra", "3.0.0-dev\n", "3.0.0-dev-dev", "3.0.0-", "03.0.0-dev")
+            .forEach { assertNull(AppUpdateManager.normalizeInstalledVersion(it)) }
+    }
+
     @Test fun rejectsPrereleasePathsControlCharactersAndNonCanonicalNumbers() {
         listOf(
             "2.4",

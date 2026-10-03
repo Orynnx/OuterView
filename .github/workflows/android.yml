@@ -29,6 +29,11 @@ jobs:
         run: sdkmanager "platforms;android-37" "build-tools;36.0.0"
       - name: Verify Hello Card package
         run: python demo/hello-card/build_card.py --check
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "22"
+      - name: Test Credex rear app
+        run: node --test demo/credex-account/test.js
       - name: Audit REAREye source separation
         run: |
           set -euo pipefail
