@@ -6,6 +6,8 @@
 
 OuterView 的 Hook 运行在主题壁纸 `com.android.thememanager` 进程中。导入的 JsCanvas JavaScript 将由系统背屏运行环境执行。静态扫描与 ZIP 校验不能证明任意脚本安全，也不构成通用 JavaScript 沙箱；只导入自己编写或来源可信的应用包。
 
+当前原生接入仅支持主用户 0，第二空间在兼容性检查时拒绝。Root、LSPosed、主题宿主及系统背屏运行环境属于本流程的可信前提；签名 IPC 和包结构检查不能隔离已经控制这些组件的代码。
+
 原生 MAML Binder、Intent、MethodCommand 和其他命令由系统宿主正常解释，导入器不按能力名称拒绝。运行时是否支持某项能力、能访问哪些数据，由系统宿主和 Android 权限决定。导入预览会显示可执行脚本提示。
 
 ## 输入与 IPC
@@ -24,6 +26,12 @@ OuterView 的 Hook 运行在主题壁纸 `com.android.thememanager` 进程中。
 
 新导入使用随机 `outerview_ai_<32位十六进制UUID>`，经主题原生接口写入当前用户的 `rearScreenAiApp_Theme` 目录，并由原生 Room、JSON 索引和背屏服务共同管理。
 
+实际资源根目录由主题资源提供者返回，导入包不能指定。主用户的典型目录为
+`/data/system/theme_magic/users/0/rearScreenAiApp_Theme/`；其中 `runtimeAiApp.json`
+是 AI 管理索引镜像。持久化背屏登记另从同一用户根目录的
+`subscreencenter/config/appInfo.json` 读取，并与服务 widget 比较；不能把其中任一份
+索引单独视作完整登记或渲染成功的证据。
+
 用户可以确认移除列表中的原生 AI 应用或本地导入应用。已注册条目先核实实际应用类型为 AI，再调用主题原生移除接口。仅存在于 AI 管理库的条目须用户确认后才删除单条管理记录，资源文件始终保留并提示。刷新不会自动清理，也不会将任意路径交给删除逻辑。
 
 `managed` 只标记是否由 OuterView 导入，不代表其他应用不可由用户移除。`registered` 表示磁盘登记中存在该 AI 应用；宿主另外返回 `runtimeRegistered`，表示当前背屏服务中是否存在。磁盘登记与服务完整有序记录一致时才标记 `registryReady`；服务暂未加载不能被解释为应用已被删除。
@@ -36,8 +44,23 @@ OuterView 的 Hook 运行在主题壁纸 `com.android.thememanager` 进程中。
 
 恢复操作复用已有管理记录和资源，通过原生接口重新登记；这不是重建丢失文件或保证恢复任意历史状态的机制。**恢复功能尚未完成真机验收。** 构建、输入校验或单元测试通过，也不能证明背屏显示、交互、生命周期及所有异常恢复路径已通过；设备结果应逐项记录。
 
+Credex 示例仅读取上游 Provider 导出的展示数据；`ContentProviderBinder` 的实际读取与
+通知行为仍受上游接口、系统宿主和 Android 权限约束。当前已有逻辑、浏览器和包解析
+验证，**手机原生渲染、读取按钮及 Provider 通知尚待实测**，不能写成已通过或保证可用。
+
+## 2.x 历史约束
+
+Assistant/Wallpaper 管理路线、旧 Host API、`notification_widget.json` 及旧 registry
+不属于 3.0 管理范围。保留的旧示例和研究记录只用于历史参考，不能据此要求当前导入
+发布 Android 通知、写入旧通知登记或操作旧壁纸资源；旧资源不自动接管、迁移或清理。
+Credex 的 Assistant 展示源和 `content://com.nickwoluff.credex/quota/assistant`
+仍是当前示例使用的上游接口名称，与已移除的 OuterView 助手管理 API 无关。
+
 ## 报告问题
 
-报告应包含开发版本、主题/系统版本、失败步骤及经过脱敏的相关日志。不要公开设备序列号、账号信息、完整 `/data` 内容、签名密钥或私人应用数据。
+报告应包含 OuterView 版本或提交、设备型号、HyperOS/Android 版本、主题壁纸
+`com.android.thememanager` 的 versionName/versionCode、LSPosed 版本与作用域、
+失败步骤及经过脱敏的相关日志。涉及背屏服务时补充其版本，不能用它替代主题宿主版本。
+不要公开设备序列号、账号信息、完整 `/data` 内容、签名密钥或私人应用数据。
 
 仓库启用私有漏洞报告时优先使用该渠道；否则先提交不含利用细节的 Issue，请维护者建立私密沟通渠道。生产签名密钥不应进入仓库。
