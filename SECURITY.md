@@ -44,17 +44,14 @@ OuterView 的 Hook 运行在主题壁纸 `com.android.thememanager` 进程中。
 
 恢复操作复用已有管理记录和资源，通过原生接口重新登记；这不是重建丢失文件或保证恢复任意历史状态的机制。**恢复功能尚未完成真机验收。** 构建、输入校验或单元测试通过，也不能证明背屏显示、交互、生命周期及所有异常恢复路径已通过；设备结果应逐项记录。
 
-Credex 示例仅读取上游 Provider 导出的展示数据；`ContentProviderBinder` 的实际读取与
-通知行为仍受上游接口、系统宿主和 Android 权限约束。当前已有逻辑、浏览器和包解析
-验证，**手机原生渲染、读取按钮及 Provider 通知尚待实测**，不能写成已通过或保证可用。
+示例的本地验证不能证明宿主兼容性；Credex 示例的原生渲染、读取按钮和 Provider 通知仍待实测。
 
 ## 2.x 历史约束
 
 Assistant/Wallpaper 管理路线、旧 Host API、`notification_widget.json` 及旧 registry
 不属于 3.0 管理范围。保留的旧示例和研究记录只用于历史参考，不能据此要求当前导入
 发布 Android 通知、写入旧通知登记或操作旧壁纸资源；旧资源不自动接管、迁移或清理。
-Credex 的 Assistant 展示源和 `content://com.nickwoluff.credex/quota/assistant`
-仍是当前示例使用的上游接口名称，与已移除的 OuterView 助手管理 API 无关。
+示例使用的上游 `/quota/assistant` 数据接口不属于旧 OuterView 助手管理 API。
 
 ## 报告问题
 

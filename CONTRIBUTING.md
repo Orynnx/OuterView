@@ -55,8 +55,7 @@ adb logcat -s OuterView-AiApp ThemeFileUtils SubScreenCenter_Service
 核对实际状态，不立即重复导入；原生调用失败不能当作已自动回滚。
 
 当前 README 仅记录 Xiaomi 17 Pro 管理入口获用户确认；恢复功能尚未完成真机验收。
-Credex 的逻辑测试、浏览器预览和包解析验证不能证明手机原生渲染、读取按钮或
-Provider 通知已通过，这些仍待实测。提交说明须区分本地检查与设备结果。
+示例的本地验证不能代替实机结果；Credex 示例的原生渲染、读取按钮和 Provider 通知仍待实测。
 
 ## 历史边界
 
@@ -64,8 +63,6 @@ Provider 通知已通过，这些仍待实测。提交说明须区分本地检�
 但不是 3.0 JsCanvas 智能应用的验证入口。Assistant/Wallpaper Host API、
 `notification_widget.json` 和旧 registry 的说明属于 2.x 研究与历史约束，
 不能作为当前导入、恢复或移除流程的验收依据；旧资源不自动迁移或删除。
-Credex 中的 Assistant 展示源及 `/quota/assistant` 是上游数据接口名称，
-不表示 OuterView 重新启用了旧助手管理路线。
 
 贡献代码默认按 GNU GPL-3.0 授权。当前实现与边界见
 [开发文档](docs/DEVELOPMENT.md)、[架构](docs/ARCHITECTURE.md) 和 [安全策略](SECURITY.md)。
